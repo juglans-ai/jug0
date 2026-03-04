@@ -192,3 +192,27 @@ pub struct BranchRequest {
     /// New chat title
     pub title: Option<String>,
 }
+
+/// Update chat request
+#[derive(Debug, Deserialize)]
+pub struct UpdateChatRequest {
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub agent_id: Option<Uuid>,
+    pub incognito: Option<bool>,
+    pub metadata: Option<Value>,
+}
+
+/// Batch delete messages request
+#[derive(Debug, Deserialize)]
+pub struct BatchDeleteMessagesRequest {
+    /// Chat-local message_ids to delete
+    pub message_ids: Vec<i32>,
+}
+
+/// Truncate messages request
+#[derive(Debug, Deserialize)]
+pub struct TruncateRequest {
+    /// Delete all messages with message_id > this value
+    pub from_message_id: i32,
+}
