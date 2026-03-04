@@ -155,54 +155,74 @@ pub fn run_chat_stream(
             let all_tools = merge_tools(&client_tools_def, &server_tools);
             let provider = provider_factory.get_provider(&model_to_use);
 
-            let mut stream: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
-                match provider.stream_chat(&model_to_use, final_system_prompt.clone(), history_from_db, all_tools).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        yield Ok(InternalStreamEvent::Error(e.to_string()));
-                        break;
-                    }
-                };
-
-            tracing::info!("⏱ [Stream] Provider stream opened: {}ms (model: {})", stream_start.elapsed().as_millis(), model_to_use);
-
             let mut full_response = String::new();
             let mut tool_acc_map: HashMap<i32, ToolCallAccumulator> = HashMap::new();
             let mut is_stream_cancelled = false;
             let mut accumulated_usage: Option<TokenUsage> = None;
             let mut first_token_logged = false;
 
-            while let Some(result) = stream.next().await {
-                if cancel_token.is_cancelled() { is_stream_cancelled = true; break; }
-                match result {
-                    Ok(chunk) => {
-                        if let Some(content) = chunk.content {
-                            if !content.is_empty() {
-                                if !first_token_logged {
-                                    tracing::info!("⏱ [Stream] First token: {}ms", stream_start.elapsed().as_millis());
-                                    first_token_logged = true;
-                                }
-                                full_response.push_str(&content);
-                                yield Ok(InternalStreamEvent::Content(content));
+            // Retry wrapper for transient stream errors (max 2 retries, only when no tokens emitted)
+            let max_stream_retries = 2u32;
+            let mut stream_retry_count = 0u32;
+
+            'stream_retry: loop {
+                let mut stream: Pin<Box<dyn Stream<Item = anyhow::Result<ChatStreamChunk>> + Send>> =
+                    match provider.stream_chat(&model_to_use, final_system_prompt.clone(), history_from_db.clone(), all_tools.clone()).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            if stream_retry_count < max_stream_retries {
+                                stream_retry_count += 1;
+                                tracing::warn!("⚠ [Stream] Provider connect error, retry {}/{}: {}", stream_retry_count, max_stream_retries, e);
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                continue 'stream_retry;
                             }
+                            yield Ok(InternalStreamEvent::Error(e.to_string()));
+                            break;
                         }
-                        for tc in chunk.tool_calls {
-                            let entry = tool_acc_map.entry(tc.index).or_default();
-                            if let Some(id) = tc.id { entry.id = id; }
-                            if let Some(name) = tc.name { entry.name.push_str(&name); }
-                            if let Some(args) = tc.arguments { entry.arguments.push_str(&args); }
+                    };
+
+                tracing::info!("⏱ [Stream] Provider stream opened: {}ms (model: {})", stream_start.elapsed().as_millis(), model_to_use);
+
+                while let Some(result) = stream.next().await {
+                    if cancel_token.is_cancelled() { is_stream_cancelled = true; break; }
+                    match result {
+                        Ok(chunk) => {
+                            if let Some(content) = chunk.content {
+                                if !content.is_empty() {
+                                    if !first_token_logged {
+                                        tracing::info!("⏱ [Stream] First token: {}ms", stream_start.elapsed().as_millis());
+                                        first_token_logged = true;
+                                    }
+                                    full_response.push_str(&content);
+                                    yield Ok(InternalStreamEvent::Content(content));
+                                }
+                            }
+                            for tc in chunk.tool_calls {
+                                let entry = tool_acc_map.entry(tc.index).or_default();
+                                if let Some(id) = tc.id { entry.id = id; }
+                                if let Some(name) = tc.name { entry.name.push_str(&name); }
+                                if let Some(args) = tc.arguments { entry.arguments.push_str(&args); }
+                            }
+                            // Accumulate usage from final chunk
+                            if chunk.usage.is_some() {
+                                accumulated_usage = chunk.usage;
+                            }
+                        },
+                        Err(e) => {
+                            // Retry only if no tokens have been emitted yet (safe to restart)
+                            if full_response.is_empty() && tool_acc_map.is_empty() && stream_retry_count < max_stream_retries {
+                                stream_retry_count += 1;
+                                tracing::warn!("⚠ [Stream] Mid-stream error (no tokens yet), retry {}/{}: {}", stream_retry_count, max_stream_retries, e);
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                continue 'stream_retry;
+                            }
+                            yield Ok(InternalStreamEvent::Error(format!("Stream Interrupted: {}", e)));
+                            is_stream_cancelled = true;
+                            break;
                         }
-                        // Accumulate usage from final chunk
-                        if chunk.usage.is_some() {
-                            accumulated_usage = chunk.usage;
-                        }
-                    },
-                    Err(e) => {
-                        yield Ok(InternalStreamEvent::Error(e.to_string()));
-                        is_stream_cancelled = true;
-                        break;
                     }
                 }
+                break 'stream_retry; // Normal completion or cancellation
             }
             tracing::info!("⏱ [Stream] Generation done: {}ms (tokens: {} chars)", stream_start.elapsed().as_millis(), full_response.len());
             if is_stream_cancelled { break; }

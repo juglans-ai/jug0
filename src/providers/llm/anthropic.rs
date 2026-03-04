@@ -10,6 +10,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::pin::Pin;
+use std::time::Duration;
 
 // --- Request DTOs ---
 
@@ -140,8 +141,13 @@ impl AnthropicProvider {
         let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
         let base_url = std::env::var("ANTHROPIC_BASE_URL")
             .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .unwrap_or_default();
         Self {
-            client: Client::new(),
+            client,
             base_url,
             api_key,
         }

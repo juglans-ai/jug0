@@ -16,6 +16,7 @@ use async_openai::{
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use std::pin::Pin;
+use std::time::Duration;
 
 pub struct DeepSeekProvider {
     client: Client<OpenAIConfig>,
@@ -29,8 +30,13 @@ impl DeepSeekProvider {
         let config = OpenAIConfig::new()
             .with_api_key(api_key)
             .with_api_base(api_base);
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .unwrap_or_default();
         Self {
-            client: Client::with_config(config),
+            client: Client::with_config(config).with_http_client(http_client),
         }
     }
 
