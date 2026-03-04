@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use anyhow::Result;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,8 +15,8 @@ pub struct McpServerConfig {
 pub struct McpTool {
     pub name: String,
     pub description: String,
-    pub input_schema: Value, 
-    
+    pub input_schema: Value,
+
     // 内部字段，用于执行时定位
     #[serde(skip)]
     pub server_url: String,
@@ -46,7 +46,7 @@ impl McpClient {
     /// 假设路径：POST {base_url}/messages with payload {"method": "tools/list"}
     pub async fn fetch_tools(&self, config: &McpServerConfig) -> Result<Vec<McpTool>> {
         let url = format!("{}/messages", config.base_url.trim_end_matches('/'));
-        
+
         let payload = json!({
             "jsonrpc": "2.0",
             "method": "tools/list",
@@ -66,17 +66,22 @@ impl McpClient {
         }
 
         let body: Value = res.json().await?;
-        
+
         // 解析标准 MCP tools/list 响应: { "result": { "tools": [...] } }
-        let tools_array = body.pointer("/result/tools")
+        let tools_array = body
+            .pointer("/result/tools")
             .and_then(|v| v.as_array())
             .ok_or_else(|| anyhow::anyhow!("Invalid MCP response format: missing result.tools"))?;
 
         let mut mcp_tools = Vec::new();
         for t in tools_array {
             // 解析 schema，部分实现可能放在 inputSchema，部分可能在 input_schema
-            let schema = t.get("inputSchema").or(t.get("input_schema")).cloned().unwrap_or(json!({}));
-            
+            let schema = t
+                .get("inputSchema")
+                .or(t.get("input_schema"))
+                .cloned()
+                .unwrap_or(json!({}));
+
             mcp_tools.push(McpTool {
                 name: t["name"].as_str().unwrap_or("unknown").to_string(),
                 description: t["description"].as_str().unwrap_or("").to_string(),

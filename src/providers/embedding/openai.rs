@@ -1,12 +1,12 @@
 // src/providers/embedding/openai.rs
 use super::EmbeddingProvider;
+use anyhow::Result;
 use async_openai::{
     config::OpenAIConfig,
     types::{CreateEmbeddingRequestArgs, EncodingFormat},
     Client,
 };
 use async_trait::async_trait;
-use anyhow::Result;
 
 pub struct OpenAIEmbedding {
     client: Client<OpenAIConfig>,
@@ -27,7 +27,7 @@ impl OpenAIEmbedding {
 #[async_trait]
 impl EmbeddingProvider for OpenAIEmbedding {
     fn dimension(&self) -> u64 {
-        1536 
+        1536
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -38,11 +38,14 @@ impl EmbeddingProvider for OpenAIEmbedding {
             .build()?;
 
         let response = self.client.embeddings().create(request).await?;
-        
+
         // 取第一个结果
-        let embedding = response.data.first()
+        let embedding = response
+            .data
+            .first()
             .ok_or_else(|| anyhow::anyhow!("No embedding returned"))?
-            .embedding.clone();
+            .embedding
+            .clone();
 
         Ok(embedding)
     }
@@ -55,10 +58,8 @@ impl EmbeddingProvider for OpenAIEmbedding {
             .build()?;
 
         let response = self.client.embeddings().create(request).await?;
-        
-        let embeddings = response.data.into_iter()
-            .map(|d| d.embedding)
-            .collect();
+
+        let embeddings = response.data.into_iter().map(|d| d.embedding).collect();
 
         Ok(embeddings)
     }

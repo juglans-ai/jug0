@@ -2,10 +2,10 @@
 pub mod openai;
 pub mod qwen;
 
-use async_trait::async_trait;
 use anyhow::Result;
-use std::sync::Arc;
-use std::env; // 确保引入 env
+use async_trait::async_trait;
+use std::env;
+use std::sync::Arc; // 确保引入 env
 
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
@@ -30,20 +30,22 @@ impl EmbeddingFactory {
 
     pub fn get_provider(&self, model_name: &str) -> Arc<dyn EmbeddingProvider> {
         let m = model_name.to_lowercase();
-        
+
         // 1. 显式匹配
         if m.contains("qwen") || m.contains("text-embedding") {
             return self.qwen.clone();
         }
-        
+
         // 2. 如果是 "default" 或空，检查环境变量
         if m == "default" || m.is_empty() {
-            let env_model = env::var("MEMORY_EMBEDDING_MODEL").unwrap_or_default().to_lowercase();
+            let env_model = env::var("MEMORY_EMBEDDING_MODEL")
+                .unwrap_or_default()
+                .to_lowercase();
             if env_model.contains("qwen") || env_model.contains("text-embedding") {
                 return self.qwen.clone();
             }
         }
-        
+
         // 3. 默认回退到 OpenAI
         self.openai.clone()
     }

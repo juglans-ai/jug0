@@ -11,21 +11,23 @@ use axum_extra::{
     headers::{authorization::Bearer, Authorization},
     TypedHeader,
 };
-use jsonwebtoken::{decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chrono::{Duration, Utc};
+use hmac::{Hmac, Mac};
+use jsonwebtoken::{
+    decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
+};
+use lazy_static::lazy_static;
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::env;
 use std::sync::Arc;
-use lazy_static::lazy_static;
-use chrono::{Utc, Duration};
-use sha2::{Sha256, Digest};
-use hmac::{Hmac, Mac};
-use sea_orm::{EntityTrait, QueryFilter, ColumnTrait, Set, ActiveModelTrait};
 use uuid::Uuid;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
+use crate::entities::{api_keys, organizations, users};
 use crate::errors::AppError;
 use crate::AppState;
-use crate::entities::{api_keys, users, organizations};
 
 /// Cache TTL in seconds (5 minutes)
 const CACHE_TTL_SECS: u64 = 300;
@@ -56,10 +58,10 @@ pub struct Claims {
 /// ORG 签发的 JWT Claims（用于前端直连 jug0）
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OrgSignedClaims {
-    pub sub: String,      // user_id (external_id from org's system)
-    pub org: String,      // org_id
-    pub iat: usize,       // issued at
-    pub exp: usize,       // expiration
+    pub sub: String, // user_id (external_id from org's system)
+    pub org: String, // org_id
+    pub iat: usize,  // issued at
+    pub exp: usize,  // expiration
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
@@ -75,13 +77,13 @@ type HmacSha256 = Hmac<Sha256>;
 /// Execution Token Claims - 包含调用链信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionClaims {
-    pub caller_user_id: Uuid,    // 实际调用者 (发起请求的用户)
-    pub caller_org_id: String,   // 调用者所属组织
-    pub author_user_id: Uuid,    // agent/workflow 作者
-    pub agent_id: Uuid,          // 被调用的 agent
-    pub chat_id: Option<Uuid>,   // 关联的 chat session
-    pub iat: i64,                // issued at (unix timestamp)
-    pub exp: i64,                // expires at (unix timestamp)
+    pub caller_user_id: Uuid,  // 实际调用者 (发起请求的用户)
+    pub caller_org_id: String, // 调用者所属组织
+    pub author_user_id: Uuid,  // agent/workflow 作者
+    pub agent_id: Uuid,        // 被调用的 agent
+    pub chat_id: Option<Uuid>, // 关联的 chat session
+    pub iat: i64,              // issued at (unix timestamp)
+    pub exp: i64,              // expires at (unix timestamp)
 }
 
 impl ExecutionClaims {
@@ -108,11 +110,12 @@ impl ExecutionClaims {
 
     /// 编码为签名 token: base64(json).base64(hmac)
     pub fn encode(&self, signing_key: &[u8]) -> String {
-        let json = serde_json::to_string(self).expect("ExecutionClaims serialization should not fail");
+        let json =
+            serde_json::to_string(self).expect("ExecutionClaims serialization should not fail");
         let payload = URL_SAFE_NO_PAD.encode(json.as_bytes());
 
-        let mut mac = HmacSha256::new_from_slice(signing_key)
-            .expect("HMAC can accept any key length");
+        let mut mac =
+            HmacSha256::new_from_slice(signing_key).expect("HMAC can accept any key length");
         mac.update(payload.as_bytes());
         let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
 
@@ -130,22 +133,24 @@ impl ExecutionClaims {
         let signature = parts[1];
 
         // 验证签名
-        let mut mac = HmacSha256::new_from_slice(signing_key)
-            .expect("HMAC can accept any key length");
+        let mut mac =
+            HmacSha256::new_from_slice(signing_key).expect("HMAC can accept any key length");
         mac.update(payload.as_bytes());
 
-        let expected_sig = URL_SAFE_NO_PAD.decode(signature)
+        let expected_sig = URL_SAFE_NO_PAD
+            .decode(signature)
             .map_err(|_| "Invalid signature encoding")?;
 
         mac.verify_slice(&expected_sig)
             .map_err(|_| "Signature verification failed")?;
 
         // 解码 payload
-        let json_bytes = URL_SAFE_NO_PAD.decode(payload)
+        let json_bytes = URL_SAFE_NO_PAD
+            .decode(payload)
             .map_err(|_| "Invalid payload encoding")?;
 
-        let claims: ExecutionClaims = serde_json::from_slice(&json_bytes)
-            .map_err(|e| format!("Invalid claims: {}", e))?;
+        let claims: ExecutionClaims =
+            serde_json::from_slice(&json_bytes).map_err(|e| format!("Invalid claims: {}", e))?;
 
         // 检查过期
         let now = Utc::now().timestamp();
@@ -168,7 +173,7 @@ pub fn verify_execution_token(
     let auth_user = AuthUser {
         id: claims.caller_user_id,
         org_id: claims.caller_org_id.clone(),
-        external_id: None,  // execution token 不携带 external_id
+        external_id: None, // execution token 不携带 external_id
         name: None,
         role: "user".to_string(),
         is_api_key: false,
@@ -178,10 +183,22 @@ pub fn verify_execution_token(
 }
 
 pub fn generate_token(user_id: Uuid, org_id: String, role: String) -> Result<String, AppError> {
-    let expiration = Utc::now().checked_add_signed(Duration::days(7)).expect("valid timestamp").timestamp();
-    let claims = Claims { sub: user_id.to_string(), exp: expiration as usize, org_id, role };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(JWT_SECRET.as_bytes()))
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Token generation failed: {}", e)))
+    let expiration = Utc::now()
+        .checked_add_signed(Duration::days(7))
+        .expect("valid timestamp")
+        .timestamp();
+    let claims = Claims {
+        sub: user_id.to_string(),
+        exp: expiration as usize,
+        org_id,
+        role,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(JWT_SECRET.as_bytes()),
+    )
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("Token generation failed: {}", e)))
 }
 
 pub fn hash_key(key: &str) -> String {
@@ -210,12 +227,14 @@ async fn verify_org_signed_token(
     let org_id = &token_data.claims.org;
 
     // 3. 查询 ORG (使用 Redis 缓存)
-    let org = get_org_cached(state, org_id).await
+    let org = get_org_cached(state, org_id)
+        .await
         .map_err(AppError::Database)?
         .ok_or_else(|| AppError::Unauthorized(format!("Organization '{}' not found", org_id)))?;
 
-    let public_key = org.public_key.as_ref()
-        .ok_or_else(|| AppError::Unauthorized("Organization has no public key configured".into()))?;
+    let public_key = org.public_key.as_ref().ok_or_else(|| {
+        AppError::Unauthorized("Organization has no public key configured".into())
+    })?;
 
     // 4. 根据算法构建解码密钥
     let algorithm = match org.key_algorithm.as_deref().unwrap_or("RS256") {
@@ -225,7 +244,12 @@ async fn verify_org_signed_token(
         "ES256" => Algorithm::ES256,
         "ES384" => Algorithm::ES384,
         "EdDSA" => Algorithm::EdDSA,
-        alg => return Err(AppError::Unauthorized(format!("Unsupported algorithm: {}", alg))),
+        alg => {
+            return Err(AppError::Unauthorized(format!(
+                "Unsupported algorithm: {}",
+                alg
+            )))
+        }
     };
 
     let decoding_key = match algorithm {
@@ -233,14 +257,10 @@ async fn verify_org_signed_token(
             DecodingKey::from_rsa_pem(public_key.as_bytes())
                 .map_err(|e| AppError::Unauthorized(format!("Invalid RSA public key: {}", e)))?
         }
-        Algorithm::ES256 | Algorithm::ES384 => {
-            DecodingKey::from_ec_pem(public_key.as_bytes())
-                .map_err(|e| AppError::Unauthorized(format!("Invalid EC public key: {}", e)))?
-        }
-        Algorithm::EdDSA => {
-            DecodingKey::from_ed_pem(public_key.as_bytes())
-                .map_err(|e| AppError::Unauthorized(format!("Invalid Ed25519 public key: {}", e)))?
-        }
+        Algorithm::ES256 | Algorithm::ES384 => DecodingKey::from_ec_pem(public_key.as_bytes())
+            .map_err(|e| AppError::Unauthorized(format!("Invalid EC public key: {}", e)))?,
+        Algorithm::EdDSA => DecodingKey::from_ed_pem(public_key.as_bytes())
+            .map_err(|e| AppError::Unauthorized(format!("Invalid Ed25519 public key: {}", e)))?,
         _ => return Err(AppError::Unauthorized("Unsupported algorithm".into())),
     };
 
@@ -324,7 +344,9 @@ async fn try_authenticate(
             if let Ok(Some(user)) = get_user_by_api_key_cached(&state, &hashed).await {
                 let auth_user = AuthUser {
                     id: user.id,
-                    org_id: user.org_id.unwrap_or_else(|| crate::official_org_slug().to_string()),
+                    org_id: user
+                        .org_id
+                        .unwrap_or_else(|| crate::official_org_slug().to_string()),
                     external_id: user.external_id,
                     name: user.name,
                     role: user.role,
@@ -337,7 +359,9 @@ async fn try_authenticate(
     }
 
     // Try JWT auth - 先检查 algorithm 决定验证路径
-    if let Ok(TypedHeader(auth_header)) = parts.extract::<TypedHeader<Authorization<Bearer>>>().await {
+    if let Ok(TypedHeader(auth_header)) =
+        parts.extract::<TypedHeader<Authorization<Bearer>>>().await
+    {
         let token = auth_header.token();
 
         if let Ok(header) = decode_header(token) {
@@ -365,7 +389,8 @@ async fn try_authenticate(
                 // RS256/ES256/EdDSA = ORG-signed JWT
                 _ => {
                     if let Ok((claims, org)) = verify_org_signed_token(&state, token).await {
-                        if let Ok(user) = get_shadow_user_cached(&state, &org.id, &claims.sub).await {
+                        if let Ok(user) = get_shadow_user_cached(&state, &org.id, &claims.sub).await
+                        {
                             let auth_user = AuthUser {
                                 id: user.id,
                                 org_id: org.id,
@@ -481,12 +506,14 @@ async fn get_user_by_api_key_cached(
         .await?;
 
     if let Some(record) = record {
-        let expired = record.expires_at
+        let expired = record
+            .expires_at
             .map(|exp| exp < chrono::Utc::now().naive_utc())
             .unwrap_or(false);
         if !expired {
             if let Some(user) = users::Entity::find_by_id(record.user_id)
-                .one(&state.db).await?
+                .one(&state.db)
+                .await?
             {
                 let _ = state.cache.set(&cache_key, &user, CACHE_TTL_SECS).await;
                 return Ok(Some(user));
@@ -515,16 +542,20 @@ pub async fn auth_middleware(
                 Ok((claims, auth_user)) => {
                     tracing::debug!(
                         "🔐 [Auth] Execution token verified: caller={}, agent={}",
-                        claims.caller_user_id, claims.agent_id
+                        claims.caller_user_id,
+                        claims.agent_id
                     );
                     parts.extensions.insert(auth_user);
-                    parts.extensions.insert(claims);  // 也存入 claims 供后续使用
+                    parts.extensions.insert(claims); // 也存入 claims 供后续使用
                     let req = Request::from_parts(parts, body);
                     return Ok(next.run(req).await);
                 }
                 Err(e) => {
                     tracing::warn!("🔐 [Auth] Execution token invalid: {}", e);
-                    return Err(AppError::Unauthorized(format!("Invalid execution token: {}", e)));
+                    return Err(AppError::Unauthorized(format!(
+                        "Invalid execution token: {}",
+                        e
+                    )));
                 }
             }
         }
@@ -538,7 +569,8 @@ pub async fn auth_middleware(
 
     if let (Some(org_id), Some(org_key)) = (org_id_header, org_key_header) {
         // Use cached organization lookup
-        let org = get_org_cached(&state, org_id).await
+        let org = get_org_cached(&state, org_id)
+            .await
             .map_err(AppError::Database)?;
 
         let org = match org {
@@ -555,10 +587,13 @@ pub async fn auth_middleware(
 
         let user = if let Some(ext_id) = external_user_id {
             // Use cached shadow user lookup
-            get_shadow_user_cached(&state, org_id, ext_id).await
+            get_shadow_user_cached(&state, org_id, ext_id)
+                .await
                 .map_err(AppError::Database)?
         } else {
-            return Err(AppError::BadRequest("X-USER-ID header is required for Org Proxy mode".into()));
+            return Err(AppError::BadRequest(
+                "X-USER-ID header is required for Org Proxy mode".into(),
+            ));
         };
 
         // 【修复】确保 org_id 不为空
@@ -587,7 +622,9 @@ pub async fn auth_middleware(
 
             match get_user_by_api_key_cached(&state, &hashed).await {
                 Ok(Some(user)) => {
-                    let final_org_id = user.org_id.unwrap_or_else(|| crate::official_org_slug().to_string());
+                    let final_org_id = user
+                        .org_id
+                        .unwrap_or_else(|| crate::official_org_slug().to_string());
 
                     let auth_user = AuthUser {
                         id: user.id,
@@ -617,7 +654,11 @@ pub async fn auth_middleware(
     //   HS256 = 内部 JWT (路径 C2)
     //   RS256/ES256/EdDSA = ORG-signed JWT (路径 C1)
     // ---------------------------------------------------------
-    if let Some(auth_header) = parts.extract::<TypedHeader<Authorization<Bearer>>>().await.ok() {
+    if let Some(auth_header) = parts
+        .extract::<TypedHeader<Authorization<Bearer>>>()
+        .await
+        .ok()
+    {
         let token = auth_header.token();
 
         // 先检查 token 的 algorithm
@@ -652,7 +693,8 @@ pub async fn auth_middleware(
                         tracing::debug!("🔐 [Auth] ORG-signed token verified for org: {}", org.id);
 
                         // 获取或创建 shadow user (使用缓存)
-                        let user = get_shadow_user_cached(&state, &org.id, &claims.sub).await
+                        let user = get_shadow_user_cached(&state, &org.id, &claims.sub)
+                            .await
                             .map_err(AppError::Database)?;
 
                         let auth_user = AuthUser {
@@ -675,7 +717,9 @@ pub async fn auth_middleware(
         return Err(AppError::Unauthorized("Invalid token".into()));
     }
 
-    Err(AppError::Unauthorized("Authentication failed: Missing credentials".into()))
+    Err(AppError::Unauthorized(
+        "Authentication failed: Missing credentials".into(),
+    ))
 }
 
 #[async_trait]
@@ -685,7 +729,11 @@ where
 {
     type Rejection = AppError;
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts.extensions.get::<AuthUser>().cloned().ok_or(AppError::Unauthorized("User context missing".to_string()))
+        parts
+            .extensions
+            .get::<AuthUser>()
+            .cloned()
+            .ok_or(AppError::Unauthorized("User context missing".to_string()))
     }
 }
 
@@ -700,6 +748,8 @@ where
 {
     type Rejection = std::convert::Infallible;
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        Ok(OptionalAuthUser(parts.extensions.get::<AuthUser>().cloned()))
+        Ok(OptionalAuthUser(
+            parts.extensions.get::<AuthUser>().cloned(),
+        ))
     }
 }

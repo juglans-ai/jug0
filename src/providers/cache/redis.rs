@@ -11,7 +11,9 @@ pub struct RedisCache {
 
 impl RedisCache {
     pub fn new(cache_service: CacheService) -> Self {
-        Self { inner: cache_service }
+        Self {
+            inner: cache_service,
+        }
     }
 
     /// Access the underlying CacheService for backward compatibility.

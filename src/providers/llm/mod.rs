@@ -1,18 +1,20 @@
 // src/providers/llm/mod.rs
+pub mod anthropic;
 pub mod chatgpt;
+pub mod claude_code;
 pub mod deepseek;
+pub mod factory;
 pub mod gemini;
 pub mod openai;
 pub mod qwen;
-pub mod factory;
 
-use async_trait::async_trait;
-use futures::Stream;
-use std::pin::Pin;
 use crate::entities::messages;
 use anyhow::Result;
-use serde_json::Value;
+use async_trait::async_trait;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::pin::Pin;
 
 #[derive(Debug, Clone)]
 pub struct ToolCallChunk {

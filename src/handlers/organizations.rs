@@ -1,18 +1,14 @@
 // src/handlers/organizations.rs
-use axum::{
-    extract::State,
-    http::HeaderMap,
-    Json,
-};
-use sea_orm::{EntityTrait, ActiveModelTrait, Set};
+use axum::{extract::State, http::HeaderMap, Json};
+use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use std::sync::Arc;
 
-use crate::AppState;
-use crate::errors::AppError;
 use crate::auth::hash_key;
 use crate::entities::organizations;
+use crate::errors::AppError;
 use crate::request::SetPublicKeyRequest;
-use crate::response::{SetPublicKeyResponse, OrgInfoResponse};
+use crate::response::{OrgInfoResponse, SetPublicKeyResponse};
+use crate::AppState;
 
 /// POST /api/organizations/public-key
 /// 设置组织的公钥（用于验证 JWT）
@@ -50,7 +46,9 @@ pub async fn set_public_key(
     // 4. 验证公钥格式
     let public_key = payload.public_key.trim();
     if !public_key.starts_with("-----BEGIN PUBLIC KEY-----") {
-        return Err(AppError::BadRequest("Invalid public key format. Expected PEM format.".into()));
+        return Err(AppError::BadRequest(
+            "Invalid public key format. Expected PEM format.".into(),
+        ));
     }
 
     // 5. 验证算法
@@ -67,7 +65,10 @@ pub async fn set_public_key(
     active_model.public_key = Set(Some(public_key.to_string()));
     active_model.key_algorithm = Set(Some(payload.key_algorithm.clone()));
 
-    active_model.update(&state.db).await.map_err(AppError::Database)?;
+    active_model
+        .update(&state.db)
+        .await
+        .map_err(AppError::Database)?;
 
     tracing::info!("🔐 [Org] Public key updated for organization: {}", org_id);
 

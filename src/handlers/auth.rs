@@ -3,32 +3,30 @@ use axum::{
     extract::{Extension, Json},
     Json as AxumJson,
 };
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait,
-    QueryFilter, Set,
-};
+use bcrypt::{hash, verify, DEFAULT_COST};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 use uuid::Uuid;
-use bcrypt::{hash, verify, DEFAULT_COST};
 
-use crate::entities::users;
-use crate::AppState;
-use crate::errors::AppError;
 use crate::auth::generate_token;
+use crate::entities::users;
+use crate::errors::AppError;
 use crate::request::{LoginRequest, RegisterRequest};
-use crate::response::{AuthResponse, UserDto, MeResponse};
+use crate::response::{AuthResponse, MeResponse, UserDto};
+use crate::AppState;
 
 // POST /api/auth/login
 pub async fn login(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<AxumJson<AuthResponse>, AppError> {
-    
     let user = users::Entity::find()
         .filter(users::Column::Email.eq(&req.email))
         .one(&state.db)
         .await?
-        .ok_or(AppError::Unauthorized("Invalid email or password".to_string()))?;
+        .ok_or(AppError::Unauthorized(
+            "Invalid email or password".to_string(),
+        ))?;
 
     // 验证密码
     let valid = if let Some(hash) = &user.password_hash {
@@ -38,14 +36,16 @@ pub async fn login(
     };
 
     if !valid {
-        return Err(AppError::Unauthorized("Invalid email or password".to_string()));
+        return Err(AppError::Unauthorized(
+            "Invalid email or password".to_string(),
+        ));
     }
 
     // 签发 Token
     let token = generate_token(
         user.id,
         user.org_id.clone().unwrap_or_default(),
-        user.role.clone()
+        user.role.clone(),
     )?;
 
     Ok(AxumJson(AuthResponse {
@@ -55,7 +55,7 @@ pub async fn login(
             email: user.email,
             name: user.name,
             role: user.role,
-        }
+        },
     }))
 }
 
@@ -64,7 +64,6 @@ pub async fn register(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<AxumJson<AuthResponse>, AppError> {
-
     // 检查邮箱是否存在
     let exists = users::Entity::find()
         .filter(users::Column::Email.eq(&req.email))
@@ -95,7 +94,7 @@ pub async fn register(
     let token = generate_token(
         saved.id,
         saved.org_id.unwrap_or_default(),
-        saved.role.clone()
+        saved.role.clone(),
     )?;
 
     Ok(AxumJson(AuthResponse {
@@ -105,13 +104,13 @@ pub async fn register(
             email: saved.email,
             name: saved.name,
             role: saved.role,
-        }
+        },
     }))
 }
 
 // GET /api/auth/me - 获取当前用户信息
-use crate::entities::organizations;
 use crate::auth::AuthUser;
+use crate::entities::organizations;
 
 pub async fn me(
     Extension(state): Extension<Arc<AppState>>,
@@ -135,7 +134,10 @@ pub async fn me(
 
     Ok(AxumJson(MeResponse {
         id: user.id.to_string(),
-        username: user.name.clone().unwrap_or_else(|| user.email.clone().unwrap_or_else(|| user.id.to_string())),
+        username: user
+            .name
+            .clone()
+            .unwrap_or_else(|| user.email.clone().unwrap_or_else(|| user.id.to_string())),
         email: user.email,
         role: Some(user.role),
         org_id: user.org_id,

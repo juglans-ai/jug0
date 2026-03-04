@@ -3,8 +3,8 @@
 // Agent repository with cache + DB fallback
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, IntoActiveModel,
+    QueryFilter, QueryOrder, Set,
 };
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -44,20 +44,20 @@ impl AgentRepository {
                     .add(
                         Condition::all()
                             .add(agents::Column::OrgId.eq(&user.org_id))
-                            .add(agents::Column::UserId.eq(user.id))
+                            .add(agents::Column::UserId.eq(user.id)),
                     )
                     // Same org public agents
                     .add(
                         Condition::all()
                             .add(agents::Column::OrgId.eq(&user.org_id))
-                            .add(agents::Column::IsPublic.eq(true))
+                            .add(agents::Column::IsPublic.eq(true)),
                     )
                     // Official public agents
                     .add(
                         Condition::all()
                             .add(agents::Column::OrgId.eq(crate::official_org_slug()))
-                            .add(agents::Column::IsPublic.eq(true))
-                    )
+                            .add(agents::Column::IsPublic.eq(true)),
+                    ),
             )
             .order_by_desc(agents::Column::CreatedAt)
             .all(&self.db)
@@ -102,20 +102,20 @@ impl AgentRepository {
                 .add(
                     Condition::all()
                         .add(agents::Column::OrgId.eq(&user.org_id))
-                        .add(agents::Column::UserId.eq(user.id))
+                        .add(agents::Column::UserId.eq(user.id)),
                 )
                 // Same org public
                 .add(
                     Condition::all()
                         .add(agents::Column::OrgId.eq(&user.org_id))
-                        .add(agents::Column::IsPublic.eq(true))
+                        .add(agents::Column::IsPublic.eq(true)),
                 )
                 // Official public
                 .add(
                     Condition::all()
                         .add(agents::Column::OrgId.eq(crate::official_org_slug()))
-                        .add(agents::Column::IsPublic.eq(true))
-                )
+                        .add(agents::Column::IsPublic.eq(true)),
+                ),
         );
 
         let agent = query
@@ -168,15 +168,13 @@ impl AgentRepository {
                 Condition::any()
                     .add(prompts::Column::UserId.eq(user.id))
                     .add(prompts::Column::IsPublic.eq(true))
-                    .add(prompts::Column::OrgId.eq(crate::official_org_slug()))
+                    .add(prompts::Column::OrgId.eq(crate::official_org_slug())),
             )
             .one(&self.db)
             .await?;
 
         if sp_exists.is_none() {
-            return Err(AppError::BadRequest(
-                "Invalid system_prompt_id".to_string(),
-            ));
+            return Err(AppError::BadRequest("Invalid system_prompt_id".to_string()));
         }
 
         // Check username uniqueness if provided
@@ -205,9 +203,9 @@ impl AgentRepository {
             description: Set(req.description),
             system_prompt_id: Set(Some(req.system_prompt_id)),
             default_model: Set(Some(req.default_model)),
-            allowed_models: Set(Some(serde_json::json!(
-                req.allowed_models.unwrap_or(vec!["gpt-4o".to_string()])
-            ))),
+            allowed_models: Set(Some(serde_json::json!(req
+                .allowed_models
+                .unwrap_or(vec!["gpt-4o".to_string()])))),
             skills: Set(Some(serde_json::json!(req.skills.unwrap_or_default()))),
             mcp_config: Set(req.mcp_config),
             temperature: Set(req.temperature.or(Some(0.7))),
@@ -223,7 +221,8 @@ impl AgentRepository {
 
         // Auto-register handle if username is provided
         if let Some(ref username) = req.username {
-            if let Err(e) = create_handle(&self.db, &user.org_id, username, "agent", agent_id).await {
+            if let Err(e) = create_handle(&self.db, &user.org_id, username, "agent", agent_id).await
+            {
                 tracing::warn!("Failed to create handle @{}: {}", username, e);
                 // Don't fail the agent creation, handle is optional
             }
@@ -319,11 +318,14 @@ impl AgentRepository {
 
                 // Delete old handle if exists
                 if old_username.is_some() {
-                    let _ = delete_handle_by_target(&self.db, &user.org_id, "agent", agent_id).await;
+                    let _ =
+                        delete_handle_by_target(&self.db, &user.org_id, "agent", agent_id).await;
                 }
 
                 // Create new handle
-                if let Err(e) = create_handle(&self.db, &user.org_id, new_username, "agent", agent_id).await {
+                if let Err(e) =
+                    create_handle(&self.db, &user.org_id, new_username, "agent", agent_id).await
+                {
                     tracing::warn!("Failed to create handle @{}: {}", new_username, e);
                 }
 
@@ -337,7 +339,10 @@ impl AgentRepository {
 
         // Invalidate caches
         self.invalidate_list_cache(&user.org_id).await;
-        let _ = self.cache.del(&format!("agents:detail:{}", updated.id)).await;
+        let _ = self
+            .cache
+            .del(&format!("agents:detail:{}", updated.id))
+            .await;
 
         Ok(updated)
     }
@@ -366,7 +371,9 @@ impl AgentRepository {
             tracing::warn!("Failed to delete handle for agent {}: {}", agent_id, e);
         }
 
-        agents::Entity::delete_by_id(agent_id).exec(&self.db).await?;
+        agents::Entity::delete_by_id(agent_id)
+            .exec(&self.db)
+            .await?;
 
         // Invalidate caches
         self.invalidate_list_cache(&user.org_id).await;
@@ -425,15 +432,11 @@ impl AgentRepository {
             }
         );
 
-        let users_map: HashMap<Uuid, users::Model> = users_result?
-            .into_iter()
-            .map(|u| (u.id, u))
-            .collect();
+        let users_map: HashMap<Uuid, users::Model> =
+            users_result?.into_iter().map(|u| (u.id, u)).collect();
 
-        let prompts_map: HashMap<Uuid, prompts::Model> = prompts_result?
-            .into_iter()
-            .map(|p| (p.id, p))
-            .collect();
+        let prompts_map: HashMap<Uuid, prompts::Model> =
+            prompts_result?.into_iter().map(|p| (p.id, p)).collect();
 
         // Build result
         let result = agents_list
@@ -476,7 +479,10 @@ impl AgentRepository {
             // 官方资源对所有 org 可见，清除全部 list 缓存
             let _ = self.cache.del_pattern("agents:list:*").await;
         } else {
-            let keys = self.cache.scan_keys(&format!("agents:list:{}:*", org_id)).await;
+            let keys = self
+                .cache
+                .scan_keys(&format!("agents:list:{}:*", org_id))
+                .await;
             for key in keys {
                 let _ = self.cache.del(&key).await;
             }

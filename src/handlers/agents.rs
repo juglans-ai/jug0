@@ -1,16 +1,16 @@
 // src/handlers/agents.rs
 use axum::{
-    extract::{Extension, Path, Json},
+    extract::{Extension, Json, Path},
     Json as AxumJson,
 };
 use std::sync::Arc;
 
-use crate::AppState;
-use crate::errors::AppError;
 use crate::auth::AuthUser;
-use crate::request::{CreateAgentRequest, UpdateAgentRequest};
-use crate::response::{AgentWithOwner, AgentDetailResponse};
 use crate::entities::agents;
+use crate::errors::AppError;
+use crate::request::{CreateAgentRequest, UpdateAgentRequest};
+use crate::response::{AgentDetailResponse, AgentWithOwner};
+use crate::AppState;
 
 /// GET /api/agents
 pub async fn list_agents(
@@ -27,7 +27,10 @@ pub async fn get_agent(
     user: AuthUser,
     Path(id_or_slug): Path<String>,
 ) -> Result<AxumJson<AgentDetailResponse>, AppError> {
-    let agent = state.agent_repo.get_by_id_or_slug(&user, &id_or_slug).await?;
+    let agent = state
+        .agent_repo
+        .get_by_id_or_slug(&user, &id_or_slug)
+        .await?;
     Ok(AxumJson(agent))
 }
 
@@ -59,5 +62,7 @@ pub async fn delete_agent(
     Path(id_or_slug): Path<String>,
 ) -> Result<AxumJson<serde_json::Value>, AppError> {
     let agent_id = state.agent_repo.delete(&user, &id_or_slug).await?;
-    Ok(AxumJson(serde_json::json!({ "success": true, "id": agent_id })))
+    Ok(AxumJson(
+        serde_json::json!({ "success": true, "id": agent_id }),
+    ))
 }

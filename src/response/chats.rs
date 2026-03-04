@@ -52,7 +52,9 @@ impl From<crate::entities::messages::Model> for MessageResponse {
             tool_call_id: m.tool_call_id,
             ref_message_id: m.ref_message_id,
             metadata: m.metadata,
-            created_at: m.created_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
+            created_at: m
+                .created_at
+                .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
         }
     }
 }

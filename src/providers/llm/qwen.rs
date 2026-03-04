@@ -1,15 +1,15 @@
 // src/providers/qwen.rs
-use super::{LlmProvider, ChatStreamChunk, ToolCallChunk, TokenUsage};
+use super::{ChatStreamChunk, LlmProvider, TokenUsage, ToolCallChunk};
 use crate::entities::messages;
 use crate::handlers::chat::MessagePart;
-use async_trait::async_trait;
-use futures::{Stream, StreamExt};
-use std::pin::Pin;
 use anyhow::Result;
+use async_trait::async_trait;
+use eventsource_stream::Eventsource;
+use futures::{Stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use eventsource_stream::Eventsource;
 use std::env;
+use std::pin::Pin;
 
 pub struct QwenProvider {
     client: Client,
@@ -84,24 +84,37 @@ impl LlmProvider for QwenProvider {
         history: Vec<messages::Model>,
         _tools: Option<Vec<serde_json::Value>>, // 原生封装暂不处理复杂工具调用逻辑
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatStreamChunk>> + Send>>> {
-        
         let mut qwen_messages = Vec::new();
 
         if let Some(sp) = system_prompt {
-            qwen_messages.push(QwenMessage { role: "system".to_string(), content: sp });
+            qwen_messages.push(QwenMessage {
+                role: "system".to_string(),
+                content: sp,
+            });
         }
 
         for msg in history {
             let content = if let Ok(parts) = serde_json::from_value::<Vec<MessagePart>>(msg.parts) {
-                parts.iter().filter_map(|p| p.content.clone()).collect::<Vec<_>>().join("\n")
-            } else { String::new() };
-            
-            qwen_messages.push(QwenMessage { role: msg.role, content });
+                parts
+                    .iter()
+                    .filter_map(|p| p.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                String::new()
+            };
+
+            qwen_messages.push(QwenMessage {
+                role: msg.role,
+                content,
+            });
         }
 
         let request = QwenChatRequest {
             model: model.to_string(),
-            input: QwenChatInput { messages: qwen_messages },
+            input: QwenChatInput {
+                messages: qwen_messages,
+            },
             parameters: QwenChatParameters {
                 result_format: "message".to_string(),
                 incremental_output: true, // 关键：开启增量输出
@@ -109,7 +122,9 @@ impl LlmProvider for QwenProvider {
             },
         };
 
-        let response = self.client.post("https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation")
+        let response = self
+            .client
+            .post("https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("X-DashScope-SSE", "enable") // 关键：开启 SSE
             .json(&request)
@@ -127,7 +142,10 @@ impl LlmProvider for QwenProvider {
 
             // DashScope SSE 结束后通常不发送 [DONE]，直接关闭连接
             let chunk: QwenResponseChunk = serde_json::from_str(&event.data)?;
-            let text = chunk.output.choices.first()
+            let text = chunk
+                .output
+                .choices
+                .first()
                 .map(|c| c.message.content.clone());
 
             // Extract usage from response

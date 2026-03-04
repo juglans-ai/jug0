@@ -42,12 +42,24 @@ impl IntoResponse for AppError {
         tracing::error!("API Error: {:?}", self);
 
         let (status, error_message) = match self {
-            AppError::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal database error".to_string()),
-            AppError::Provider(e) => (StatusCode::BAD_GATEWAY, format!("LLM Provider error: {}", e)),
+            AppError::Database(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal database error".to_string(),
+            ),
+            AppError::Provider(e) => (
+                StatusCode::BAD_GATEWAY,
+                format!("LLM Provider error: {}", e),
+            ),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            AppError::Serde(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Serialization error".to_string()),
-            AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong".to_string()),
+            AppError::Serde(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Serialization error".to_string(),
+            ),
+            AppError::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Something went wrong".to_string(),
+            ),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),

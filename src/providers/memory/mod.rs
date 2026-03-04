@@ -1,8 +1,8 @@
 // src/providers/memory/mod.rs
 pub mod qdrant;
 
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -24,7 +24,9 @@ pub struct MemoryFilter {
 
 impl MemoryFilter {
     pub fn new() -> Self {
-        Self { fields: HashMap::new() }
+        Self {
+            fields: HashMap::new(),
+        }
     }
 
     pub fn with(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {

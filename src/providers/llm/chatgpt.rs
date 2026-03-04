@@ -1,27 +1,23 @@
 // src/providers/chatgpt.rs
-use super::{LlmProvider, ChatStreamChunk, ToolCallChunk, TokenUsage};
+use super::{ChatStreamChunk, LlmProvider, TokenUsage, ToolCallChunk};
 use crate::entities::messages;
 use crate::handlers::chat::MessagePart;
+use anyhow::Result;
 use async_openai::{
     config::OpenAIConfig,
     types::{
         ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
-        ChatCompletionRequestToolMessageArgs,
-        CreateChatCompletionRequestArgs, ChatCompletionTool,
-        ChatCompletionRequestMessageContentPart,
-        ChatCompletionRequestMessageContentPartTextArgs,
-        ChatCompletionRequestMessageContentPartImageArgs,
-        ImageUrlArgs,
-        ChatCompletionRequestUserMessageContent,
-        ChatCompletionStreamOptions,
+        ChatCompletionRequestMessageContentPart, ChatCompletionRequestMessageContentPartImageArgs,
+        ChatCompletionRequestMessageContentPartTextArgs, ChatCompletionRequestSystemMessageArgs,
+        ChatCompletionRequestToolMessageArgs, ChatCompletionRequestUserMessageArgs,
+        ChatCompletionRequestUserMessageContent, ChatCompletionStreamOptions, ChatCompletionTool,
+        CreateChatCompletionRequestArgs, ImageUrlArgs,
     },
     Client,
 };
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use std::pin::Pin;
-use anyhow::Result;
 
 pub struct ChatGPTProvider {
     client: Client<OpenAIConfig>,
@@ -43,9 +39,12 @@ impl ChatGPTProvider {
         }
     }
 
-    fn build_user_content(&self, parts_json: &serde_json::Value) -> ChatCompletionRequestUserMessageContent {
+    fn build_user_content(
+        &self,
+        parts_json: &serde_json::Value,
+    ) -> ChatCompletionRequestUserMessageContent {
         let mut content_parts = Vec::new();
-        
+
         if let Ok(parts) = serde_json::from_value::<Vec<MessagePart>>(parts_json.clone()) {
             for part in parts {
                 match part.part_type.as_str() {
@@ -53,22 +52,33 @@ impl ChatGPTProvider {
                         if let Some(text) = part.content {
                             if !text.is_empty() {
                                 content_parts.push(ChatCompletionRequestMessageContentPart::Text(
-                                    ChatCompletionRequestMessageContentPartTextArgs::default().text(text).build().unwrap()
+                                    ChatCompletionRequestMessageContentPartTextArgs::default()
+                                        .text(text)
+                                        .build()
+                                        .unwrap(),
                                 ));
                             }
                         }
-                    },
+                    }
                     "image" => {
                         if let Some(url_val) = part.data {
                             if let Some(url_str) = url_val.as_str() {
-                                content_parts.push(ChatCompletionRequestMessageContentPart::ImageUrl(
-                                    ChatCompletionRequestMessageContentPartImageArgs::default()
-                                        .image_url(ImageUrlArgs::default().url(url_str).build().unwrap())
-                                        .build().unwrap()
-                                ));
+                                content_parts.push(
+                                    ChatCompletionRequestMessageContentPart::ImageUrl(
+                                        ChatCompletionRequestMessageContentPartImageArgs::default()
+                                            .image_url(
+                                                ImageUrlArgs::default()
+                                                    .url(url_str)
+                                                    .build()
+                                                    .unwrap(),
+                                            )
+                                            .build()
+                                            .unwrap(),
+                                    ),
+                                );
                             }
                         }
-                    },
+                    }
                     "kline" | "position" | "balance" | "news" | "order" | "symbolInfo" => {
                         if let Some(data) = part.data {
                             let label = match part.part_type.as_str() {
@@ -76,18 +86,29 @@ impl ChatGPTProvider {
                                 "position" => "User Positions",
                                 "balance" => "Wallet Balance",
                                 "news" => "News Article",
-                                _ => "Attached Data"
+                                _ => "Attached Data",
                             };
-                            let text_block = format!("\n--- {} ---\n{}\n--- End {} ---\n", label, data.to_string(), label);
+                            let text_block = format!(
+                                "\n--- {} ---\n{}\n--- End {} ---\n",
+                                label,
+                                data.to_string(),
+                                label
+                            );
                             content_parts.push(ChatCompletionRequestMessageContentPart::Text(
-                                ChatCompletionRequestMessageContentPartTextArgs::default().text(text_block).build().unwrap()
+                                ChatCompletionRequestMessageContentPartTextArgs::default()
+                                    .text(text_block)
+                                    .build()
+                                    .unwrap(),
                             ));
                         }
-                    },
+                    }
                     "tool_result" => {
-                         if let Some(text) = part.content {
+                        if let Some(text) = part.content {
                             content_parts.push(ChatCompletionRequestMessageContentPart::Text(
-                                ChatCompletionRequestMessageContentPartTextArgs::default().text(text).build().unwrap()
+                                ChatCompletionRequestMessageContentPartTextArgs::default()
+                                    .text(text)
+                                    .build()
+                                    .unwrap(),
                             ));
                         }
                     }
@@ -96,9 +117,9 @@ impl ChatGPTProvider {
             }
         }
         if content_parts.is_empty() {
-             ChatCompletionRequestUserMessageContent::Text("".to_string())
+            ChatCompletionRequestUserMessageContent::Text("".to_string())
         } else {
-             ChatCompletionRequestUserMessageContent::Array(content_parts)
+            ChatCompletionRequestUserMessageContent::Array(content_parts)
         }
     }
 }
@@ -113,7 +134,6 @@ impl LlmProvider for ChatGPTProvider {
         history: Vec<messages::Model>,
         tools: Option<Vec<serde_json::Value>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatStreamChunk>> + Send>>> {
-        
         let mut request_messages: Vec<ChatCompletionRequestMessage> = Vec::new();
         let history_len = history.len();
 
@@ -124,33 +144,57 @@ impl LlmProvider for ChatGPTProvider {
                     ChatCompletionRequestSystemMessageArgs::default()
                         .content(sp)
                         .build()?
-                        .into()
+                        .into(),
                 );
             }
         }
-        
+
         for (i, msg) in history.iter().enumerate() {
             match msg.role.as_str() {
                 // 如果数据库里偶尔还有 system 消息，可以选择保留或忽略，这里保留以兼容旧数据
                 "system" => {
-                    let text = if let Ok(parts) = serde_json::from_value::<Vec<MessagePart>>(msg.parts.clone()) {
-                        parts.first().and_then(|p| p.content.clone()).unwrap_or_default()
-                    } else { String::new() };
-                    request_messages.push(ChatCompletionRequestSystemMessageArgs::default().content(text).build()?.into());
-                },
+                    let text = if let Ok(parts) =
+                        serde_json::from_value::<Vec<MessagePart>>(msg.parts.clone())
+                    {
+                        parts
+                            .first()
+                            .and_then(|p| p.content.clone())
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    request_messages.push(
+                        ChatCompletionRequestSystemMessageArgs::default()
+                            .content(text)
+                            .build()?
+                            .into(),
+                    );
+                }
                 "user" => {
                     let content = self.build_user_content(&msg.parts);
-                    request_messages.push(ChatCompletionRequestUserMessageArgs::default().content(content).build()?.into());
-                },
+                    request_messages.push(
+                        ChatCompletionRequestUserMessageArgs::default()
+                            .content(content)
+                            .build()?
+                            .into(),
+                    );
+                }
                 "assistant" => {
-                    let text = if let Ok(parts) = serde_json::from_value::<Vec<MessagePart>>(msg.parts.clone()) {
-                        parts.first().and_then(|p| p.content.clone()).unwrap_or_default()
-                    } else { String::new() };
+                    let text = if let Ok(parts) =
+                        serde_json::from_value::<Vec<MessagePart>>(msg.parts.clone())
+                    {
+                        parts
+                            .first()
+                            .and_then(|p| p.content.clone())
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
 
                     let mut builder = ChatCompletionRequestAssistantMessageArgs::default();
                     let mut has_content = false;
-                    if !text.is_empty() { 
-                        builder.content(text); 
+                    if !text.is_empty() {
+                        builder.content(text);
                         has_content = true;
                     }
 
@@ -158,31 +202,50 @@ impl LlmProvider for ChatGPTProvider {
                     let mut has_tools = false;
                     if let Some(tc_json) = &msg.tool_calls {
                         let is_next_tool = if i + 1 < history_len {
-                            history[i+1].role == "tool"
+                            history[i + 1].role == "tool"
                         } else {
                             false
                         };
 
                         if is_next_tool {
-                            if let Ok(tc_vec) = serde_json::from_value::<Vec<async_openai::types::ChatCompletionMessageToolCall>>(tc_json.clone()) {
+                            if let Ok(tc_vec) = serde_json::from_value::<
+                                Vec<async_openai::types::ChatCompletionMessageToolCall>,
+                            >(tc_json.clone())
+                            {
                                 builder.tool_calls(tc_vec);
                                 has_tools = true;
                             }
                         }
                     }
-                    
+
                     if has_content || has_tools {
                         request_messages.push(builder.build()?.into());
                     }
-                },
+                }
                 "tool" => {
-                    let tool_call_id = msg.tool_call_id.clone().ok_or_else(|| anyhow::anyhow!("Tool message missing ID"))?;
-                    let text = if let Ok(parts) = serde_json::from_value::<Vec<MessagePart>>(msg.parts.clone()) {
-                         parts.first().and_then(|p| p.content.clone()).unwrap_or_default()
-                    } else { String::new() };
-                    
-                    request_messages.push(ChatCompletionRequestToolMessageArgs::default().content(text).tool_call_id(tool_call_id).build()?.into());
-                },
+                    let tool_call_id = msg
+                        .tool_call_id
+                        .clone()
+                        .ok_or_else(|| anyhow::anyhow!("Tool message missing ID"))?;
+                    let text = if let Ok(parts) =
+                        serde_json::from_value::<Vec<MessagePart>>(msg.parts.clone())
+                    {
+                        parts
+                            .first()
+                            .and_then(|p| p.content.clone())
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+
+                    request_messages.push(
+                        ChatCompletionRequestToolMessageArgs::default()
+                            .content(text)
+                            .tool_call_id(tool_call_id)
+                            .build()?
+                            .into(),
+                    );
+                }
                 _ => {}
             }
         }
@@ -195,15 +258,21 @@ impl LlmProvider for ChatGPTProvider {
                     converted_tools.push(tool);
                 }
             }
-            if !converted_tools.is_empty() { request_tools = Some(converted_tools); }
+            if !converted_tools.is_empty() {
+                request_tools = Some(converted_tools);
+            }
         }
 
         let mut args = CreateChatCompletionRequestArgs::default();
         args.model(model)
             .messages(request_messages)
             .stream(true)
-            .stream_options(ChatCompletionStreamOptions { include_usage: true });
-        if let Some(t) = request_tools { args.tools(t); }
+            .stream_options(ChatCompletionStreamOptions {
+                include_usage: true,
+            });
+        if let Some(t) = request_tools {
+            args.tools(t);
+        }
         let request = args.build()?;
 
         let stream = self.client.chat().create_stream(request).await?;
@@ -213,7 +282,9 @@ impl LlmProvider for ChatGPTProvider {
                 Ok(resp) => {
                     let choice = resp.choices.first();
                     let content = choice.and_then(|c| c.delta.content.clone());
-                    let finish_reason = choice.and_then(|c| c.finish_reason.clone()).map(|r| format!("{:?}", r));
+                    let finish_reason = choice
+                        .and_then(|c| c.finish_reason.clone())
+                        .map(|r| format!("{:?}", r));
 
                     let mut tool_chunks = Vec::new();
                     if let Some(c) = choice {
@@ -223,7 +294,10 @@ impl LlmProvider for ChatGPTProvider {
                                     index: tc.index,
                                     id: tc.id.clone(),
                                     name: tc.function.as_ref().and_then(|f| f.name.clone()),
-                                    arguments: tc.function.as_ref().and_then(|f| f.arguments.clone()),
+                                    arguments: tc
+                                        .function
+                                        .as_ref()
+                                        .and_then(|f| f.arguments.clone()),
                                     signature: None,
                                 });
                             }
@@ -237,8 +311,13 @@ impl LlmProvider for ChatGPTProvider {
                         total_tokens: u.total_tokens as i64,
                     });
 
-                    Ok(ChatStreamChunk { content, tool_calls: tool_chunks, usage, finish_reason })
-                },
+                    Ok(ChatStreamChunk {
+                        content,
+                        tool_calls: tool_chunks,
+                        usage,
+                        finish_reason,
+                    })
+                }
                 Err(e) => Err(anyhow::anyhow!("ChatGPT Provider Error: {}", e)),
             }
         });

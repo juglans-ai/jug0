@@ -2,19 +2,16 @@
 //
 // Internal user sync handler for juglans-api integration
 
-use axum::{
-    extract::Extension,
-    Json,
-};
+use axum::{extract::Extension, Json};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::entities::users;
-use crate::AppState;
 use crate::errors::AppError;
-use crate::request::{SyncUserRequest, BatchSyncRequest};
-use crate::response::{SyncUserResponse, BatchSyncResponse};
+use crate::request::{BatchSyncRequest, SyncUserRequest};
+use crate::response::{BatchSyncResponse, SyncUserResponse};
+use crate::AppState;
 
 /// POST /api/internal/sync-user
 ///
@@ -26,11 +23,15 @@ pub async fn sync_user(
     Extension(state): Extension<Arc<AppState>>,
     Json(req): Json<SyncUserRequest>,
 ) -> Result<Json<SyncUserResponse>, AppError> {
-    let org_id = req.org_id.unwrap_or_else(|| crate::official_org_slug().to_string());
+    let org_id = req
+        .org_id
+        .unwrap_or_else(|| crate::official_org_slug().to_string());
 
     tracing::info!(
         "[User Sync] Syncing user: id={}, username={}, org={}",
-        req.id, req.username, org_id
+        req.id,
+        req.username,
+        org_id
     );
 
     // Check if user already exists by external_id (juglans-api user ID)
@@ -61,7 +62,6 @@ pub async fn sync_user(
 
         message = format!("Updated existing user (external_id={})", req.id);
         tracing::info!("[User Sync] {}", message);
-
     } else if let Some(existing_username) = existing_by_username {
         // Username exists but with different external_id - update external_id
         // This handles the case where a user was created before sync was implemented
@@ -74,9 +74,11 @@ pub async fn sync_user(
         active.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
         active.update(&state.db).await?;
 
-        message = format!("Linked existing username '{}' to external_id={}", req.username, req.id);
+        message = format!(
+            "Linked existing username '{}' to external_id={}",
+            req.username, req.id
+        );
         tracing::info!("[User Sync] {}", message);
-
     } else {
         // Create new user
         jug0_user_id = Uuid::new_v4();
@@ -93,7 +95,10 @@ pub async fn sync_user(
         };
         new_user.insert(&state.db).await?;
 
-        message = format!("Created new user: username={}, external_id={}", req.username, req.id);
+        message = format!(
+            "Created new user: username={}, external_id={}",
+            req.username, req.id
+        );
         tracing::info!("[User Sync] {}", message);
     }
 
@@ -128,7 +133,11 @@ pub async fn batch_sync_users(
         }
     }
 
-    tracing::info!("[User Sync] Batch complete: {} synced, {} errors", synced, errors.len());
+    tracing::info!(
+        "[User Sync] Batch complete: {} synced, {} errors",
+        synced,
+        errors.len()
+    );
 
     Ok(Json(BatchSyncResponse {
         success: errors.is_empty(),
@@ -139,7 +148,9 @@ pub async fn batch_sync_users(
 
 /// Internal sync logic (shared between single and batch)
 async fn sync_user_internal(state: &Arc<AppState>, req: SyncUserRequest) -> Result<Uuid, AppError> {
-    let org_id = req.org_id.unwrap_or_else(|| crate::official_org_slug().to_string());
+    let org_id = req
+        .org_id
+        .unwrap_or_else(|| crate::official_org_slug().to_string());
 
     let existing = users::Entity::find()
         .filter(users::Column::ExternalId.eq(&req.id))

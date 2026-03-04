@@ -1,32 +1,35 @@
 // src/handlers/chat/mod.rs
-pub mod types;
 pub mod helpers;
 pub mod logic;
+pub mod types;
 
 use axum::{
-    extract::{Extension, Json, Query},
-    response::{sse::{Event, Sse}, IntoResponse, Response},
     body::Body,
+    extract::{Extension, Json, Query},
+    response::{
+        sse::{Event, Sse},
+        IntoResponse, Response,
+    },
 };
+use futures::StreamExt;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, 
-    QueryFilter, QueryOrder, Set, QuerySelect, Condition
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    Set,
 };
 use serde_json::json;
-use std::sync::Arc;
-use std::env;
-use futures::StreamExt;
-use uuid::Uuid;
 use std::convert::Infallible;
+use std::env;
+use std::sync::Arc;
+use uuid::Uuid;
 
-use crate::entities::{chats, messages, agents, prompts, workflows, handles};
-use crate::AppState;
+use crate::auth::{AuthUser, ExecutionClaims};
+use crate::entities::{agents, chats, handles, messages, prompts, workflows};
 use crate::errors::AppError;
 use crate::services::mcp::McpServerConfig;
-use crate::auth::{AuthUser, ExecutionClaims};
+use crate::AppState;
 
-pub use types::*;
 use logic::run_chat_stream;
+pub use types::*;
 
 /// Resolve @handle to agent (returns agent_id if found)
 pub async fn resolve_handle_to_agent(
@@ -98,7 +101,8 @@ pub async fn resolve_chat_id_or_handle(
 
     // Try resolving as @handle
     if id_or_handle.starts_with('@') {
-        let agent_id = resolve_handle_to_agent(db, org_id, id_or_handle).await?
+        let agent_id = resolve_handle_to_agent(db, org_id, id_or_handle)
+            .await?
             .ok_or_else(|| AppError::NotFound(format!("Handle '{}' not found", id_or_handle)))?;
         let existing_chat = find_existing_agent_chat(db, org_id, user_id, agent_id).await?;
         return Ok((existing_chat.map(|c| c.id), Some(agent_id)));
@@ -124,16 +128,24 @@ pub async fn resolve_chat_id_strict(
 
     // Try resolving as @handle
     if id_or_handle.starts_with('@') {
-        let agent_id = resolve_handle_to_agent(db, org_id, id_or_handle).await?
+        let agent_id = resolve_handle_to_agent(db, org_id, id_or_handle)
+            .await?
             .ok_or_else(|| AppError::NotFound(format!("Handle '{}' not found", id_or_handle)))?;
-        let existing_chat = find_existing_agent_chat(db, org_id, user_id, agent_id).await?
+        let existing_chat = find_existing_agent_chat(db, org_id, user_id, agent_id)
+            .await?
             .ok_or_else(|| AppError::NotFound(format!("No chat with agent '{}'", id_or_handle)))?;
         return Ok(existing_chat.id);
     }
 
     // Try external_id
-    let existing_chat = find_chat_by_external_id(db, org_id, id_or_handle).await?
-        .ok_or_else(|| AppError::NotFound(format!("Chat with external_id '{}' not found", id_or_handle)))?;
+    let existing_chat = find_chat_by_external_id(db, org_id, id_or_handle)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "Chat with external_id '{}' not found",
+                id_or_handle
+            ))
+        })?;
     Ok(existing_chat.id)
 }
 
@@ -150,7 +162,6 @@ async fn forward_to_workflow(
     user_message_id: Option<i32>,
     user_message_uuid: Option<Uuid>,
 ) -> Result<Response, AppError> {
-
     // 构建转发请求体，覆盖 stream 参数
     let mut forward_body = serde_json::to_value(req)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to serialize request: {}", e)))?;
@@ -186,14 +197,28 @@ async fn forward_to_workflow(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Workflow request failed: {}", e)))?;
 
     let resp_status = response.status();
-    let resp_ct = response.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-    tracing::info!("📡 [Forward] Agent response: status={}, content-type={}", resp_status, resp_ct);
+    let resp_ct = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    tracing::info!(
+        "📡 [Forward] Agent response: status={}, content-type={}",
+        resp_status,
+        resp_ct
+    );
 
     if !response.status().is_success() {
         let status = response.status();
-        let error_body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         return Err(AppError::Internal(anyhow::anyhow!(
-            "Workflow returned error {}: {}", status, error_body
+            "Workflow returned error {}: {}",
+            status,
+            error_body
         )));
     }
 
@@ -247,7 +272,10 @@ async fn forward_to_workflow(
                                     event = event.event(et.clone());
                                 }
                                 if tx.send(event).await.is_err() {
-                                    tracing::warn!("📡 [Forward] receiver dropped after {} chunks", chunk_count);
+                                    tracing::warn!(
+                                        "📡 [Forward] receiver dropped after {} chunks",
+                                        chunk_count
+                                    );
                                     return;
                                 }
                             }
@@ -259,19 +287,24 @@ async fn forward_to_workflow(
                     }
                 }
             }
-            tracing::info!("📡 [Forward] stream ended: {} chunks, {} bytes total", chunk_count, total_bytes);
+            tracing::info!(
+                "📡 [Forward] stream ended: {} chunks, {} bytes total",
+                chunk_count,
+                total_bytes
+            );
         });
 
         // 构建 meta 事件
         let meta_event = override_chat_id.map(|cid| {
-            Event::default()
-                .event("meta")
-                .data(serde_json::json!({
+            Event::default().event("meta").data(
+                serde_json::json!({
                     "type": "meta",
                     "chat_id": cid,
                     "user_message_id": user_message_id.unwrap_or(0),
                     "user_message_uuid": user_message_uuid,
-                }).to_string())
+                })
+                .to_string(),
+            )
         });
 
         // 用 async_stream 构建 Event 流，通过 Sse::new() 发射（与非 workflow 路径一致）
@@ -291,7 +324,9 @@ async fn forward_to_workflow(
             .into_response())
     } else {
         // 非流式，直接返回 JSON
-        let json_body = response.text().await
+        let json_body = response
+            .text()
+            .await
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to read response: {}", e)))?;
 
         Ok(Response::builder()
@@ -318,17 +353,25 @@ pub async fn tool_result_handler(
                 AppError::Internal(anyhow::anyhow!("Stream no longer waiting for tool results"))
             })?;
 
-            tracing::info!("[ToolResult] Pushed {} results to stream for chat {}", req.results.len(), chat_id);
+            tracing::info!(
+                "[ToolResult] Pushed {} results to stream for chat {}",
+                req.results.len(),
+                chat_id
+            );
 
             return Ok(Json(json!({
                 "status": "ok",
                 "chat_id": chat_id,
-            })).into_response());
+            }))
+            .into_response());
         }
         // No active channel — check workflow_forwards using call_id as chat_id
         // (workflow SSE may omit chat_id in meta, so req.chat_id can be None)
         if let Some(info) = state.workflow_forwards.get(&chat_id) {
-            let base_url = info.endpoint_url.trim_end_matches('/').trim_end_matches("/api/chat");
+            let base_url = info
+                .endpoint_url
+                .trim_end_matches('/')
+                .trim_end_matches("/api/chat");
             let forward_url = format!("{}/api/chat/tool-result", base_url);
 
             let execution_token = {
@@ -345,10 +388,12 @@ pub async fn tool_result_handler(
 
             tracing::info!(
                 "🌉 Forwarding tool_result (call_id as chat_id: {}) via workflow_forwards to: {}",
-                chat_id, forward_url
+                chat_id,
+                forward_url
             );
 
-            let response = state.http_client
+            let response = state
+                .http_client
                 .post(&forward_url)
                 .header("X-Execution-Token", &execution_token)
                 .json(&json!({
@@ -357,10 +402,16 @@ pub async fn tool_result_handler(
                 }))
                 .send()
                 .await
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Tool result forward failed: {}", e)))?;
+                .map_err(|e| {
+                    AppError::Internal(anyhow::anyhow!("Tool result forward failed: {}", e))
+                })?;
 
-            let body: serde_json::Value = response.json().await
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse tool result response: {}", e)))?;
+            let body: serde_json::Value = response.json().await.map_err(|e| {
+                AppError::Internal(anyhow::anyhow!(
+                    "Failed to parse tool result response: {}",
+                    e
+                ))
+            })?;
 
             return Ok(Json(body).into_response());
         }
@@ -369,7 +420,10 @@ pub async fn tool_result_handler(
     // ─── Workflow forwarding: prefer cached mapping via req.chat_id (zero DB queries) ───
     if let Some(chat_id) = req.chat_id.as_deref().and_then(|s| Uuid::parse_str(s).ok()) {
         if let Some(info) = state.workflow_forwards.get(&chat_id) {
-            let base_url = info.endpoint_url.trim_end_matches('/').trim_end_matches("/api/chat");
+            let base_url = info
+                .endpoint_url
+                .trim_end_matches('/')
+                .trim_end_matches("/api/chat");
             let forward_url = format!("{}/api/chat/tool-result", base_url);
 
             let execution_token = {
@@ -386,10 +440,13 @@ pub async fn tool_result_handler(
 
             tracing::info!(
                 "🌉 Forwarding tool_result (call_id: {}, chat_id: {}) via cached mapping to: {}",
-                req.call_id, chat_id, forward_url
+                req.call_id,
+                chat_id,
+                forward_url
             );
 
-            let response = state.http_client
+            let response = state
+                .http_client
                 .post(&forward_url)
                 .header("X-Execution-Token", &execution_token)
                 .json(&json!({
@@ -398,10 +455,16 @@ pub async fn tool_result_handler(
                 }))
                 .send()
                 .await
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Tool result forward failed: {}", e)))?;
+                .map_err(|e| {
+                    AppError::Internal(anyhow::anyhow!("Tool result forward failed: {}", e))
+                })?;
 
-            let body: serde_json::Value = response.json().await
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse tool result response: {}", e)))?;
+            let body: serde_json::Value = response.json().await.map_err(|e| {
+                AppError::Internal(anyhow::anyhow!(
+                    "Failed to parse tool result response: {}",
+                    e
+                ))
+            })?;
 
             return Ok(Json(body).into_response());
         }
@@ -417,18 +480,18 @@ pub async fn tool_result_handler(
                 .add(
                     Condition::all()
                         .add(agents::Column::OrgId.eq(&user.org_id))
-                        .add(agents::Column::UserId.eq(user.id))
+                        .add(agents::Column::UserId.eq(user.id)),
                 )
                 .add(agents::Column::OrgId.eq(crate::official_org_slug()))
-                .add(agents::Column::IsPublic.eq(true))
+                .add(agents::Column::IsPublic.eq(true)),
         )
         .one(&state.db)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Agent '{}' not found", agent_slug)))?;
 
-    let workflow_id = agent.workflow_id.ok_or_else(|| {
-        AppError::BadRequest(format!("Agent '{}' has no workflow", agent_slug))
-    })?;
+    let workflow_id = agent
+        .workflow_id
+        .ok_or_else(|| AppError::BadRequest(format!("Agent '{}' has no workflow", agent_slug)))?;
 
     let workflow = workflows::Entity::find_by_id(workflow_id)
         .one(&state.db)
@@ -439,7 +502,9 @@ pub async fn tool_result_handler(
         AppError::BadRequest(format!("Workflow '{}' has no endpoint", workflow.slug))
     })?;
 
-    let base_url = endpoint_url.trim_end_matches('/').trim_end_matches("/api/chat");
+    let base_url = endpoint_url
+        .trim_end_matches('/')
+        .trim_end_matches("/api/chat");
     let forward_url = format!("{}/api/chat/tool-result", base_url);
 
     let execution_token = {
@@ -457,10 +522,12 @@ pub async fn tool_result_handler(
 
     tracing::info!(
         "🌉 Forwarding tool_result (call_id: {}) to workflow endpoint: {}",
-        req.call_id, forward_url
+        req.call_id,
+        forward_url
     );
 
-    let response = state.http_client
+    let response = state
+        .http_client
         .post(&forward_url)
         .header("X-Execution-Token", &execution_token)
         .json(&json!({
@@ -471,8 +538,12 @@ pub async fn tool_result_handler(
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Tool result forward failed: {}", e)))?;
 
-    let body: serde_json::Value = response.json().await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to parse tool result response: {}", e)))?;
+    let body: serde_json::Value = response.json().await.map_err(|e| {
+        AppError::Internal(anyhow::anyhow!(
+            "Failed to parse tool result response: {}",
+            e
+        ))
+    })?;
 
     Ok(Json(body).into_response())
 }
@@ -480,23 +551,23 @@ pub async fn tool_result_handler(
 pub async fn list_chats_handler(
     Extension(state): Extension<Arc<AppState>>,
     user: AuthUser,
-    Query(params): Query<ListChatsQuery>
+    Query(params): Query<ListChatsQuery>,
 ) -> Result<Json<Vec<chats::Model>>, AppError> {
     let limit = params.limit.unwrap_or(50);
-    
+
     let chats = chats::Entity::find()
         .filter(chats::Column::OrgId.eq(&user.org_id))
         .filter(chats::Column::UserId.eq(user.id))
         .filter(
             Condition::any()
                 .add(chats::Column::Incognito.eq(false))
-                .add(chats::Column::Incognito.is_null())
+                .add(chats::Column::Incognito.is_null()),
         )
         .order_by_desc(chats::Column::UpdatedAt)
         .limit(limit)
         .all(&state.db)
         .await?;
-        
+
     Ok(Json(chats))
 }
 
@@ -512,8 +583,11 @@ pub async fn stop_chat_handler(
             resolve_chat_id_strict(&state.db, &user.org_id, user.id, h).await?
         }
         ChatIdInput::ExternalId(ext_id) => {
-            find_chat_by_external_id(&state.db, &user.org_id, ext_id).await?
-                .ok_or_else(|| AppError::NotFound(format!("Chat with external_id '{}' not found", ext_id)))?
+            find_chat_by_external_id(&state.db, &user.org_id, ext_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::NotFound(format!("Chat with external_id '{}' not found", ext_id))
+                })?
                 .id
         }
     };
@@ -525,7 +599,9 @@ pub async fn stop_chat_handler(
         .await?;
 
     if exists.is_none() {
-        return Err(AppError::NotFound("Chat not found or access denied".to_string()));
+        return Err(AppError::NotFound(
+            "Chat not found or access denied".to_string(),
+        ));
     }
 
     if let Some(token) = state.active_requests.get(&chat_id) {
@@ -541,7 +617,8 @@ pub async fn chat_handler(
     Json(req): Json<ChatRequest>,
 ) -> Result<Response, AppError> {
     let start_time = std::time::Instant::now();
-    let global_enable_memory = env::var("ENABLE_MEMORY").unwrap_or_else(|_| "false".to_string()) == "true";
+    let global_enable_memory =
+        env::var("ENABLE_MEMORY").unwrap_or_else(|_| "false".to_string()) == "true";
     let default_model = env::var("DEFAULT_LLM_MODEL").unwrap_or_else(|_| "qwen-plus".to_string());
 
     // Resolve chat_id input: UUID / @handle / external_id
@@ -549,26 +626,19 @@ pub async fn chat_handler(
         Some(ChatIdInput::Uuid(id)) => (Some(*id), None, None),
         Some(ChatIdInput::Handle(h)) => {
             // Resolve @handle to agent
-            let agent_id = resolve_handle_to_agent(&state.db, &user.org_id, h).await?
+            let agent_id = resolve_handle_to_agent(&state.db, &user.org_id, h)
+                .await?
                 .ok_or_else(|| AppError::NotFound(format!("Handle '{}' not found", h)))?;
 
             // Find existing chat with this agent (Telegram-style persistent DM)
-            let existing_chat = find_existing_agent_chat(
-                &state.db,
-                &user.org_id,
-                user.id,
-                agent_id,
-            ).await?;
+            let existing_chat =
+                find_existing_agent_chat(&state.db, &user.org_id, user.id, agent_id).await?;
 
             (existing_chat.map(|c| c.id), Some(agent_id), None)
         }
         Some(ChatIdInput::ExternalId(ext_id)) => {
             // Arbitrary platform ID (e.g. Feishu group "oc_xxx")
-            let existing_chat = find_chat_by_external_id(
-                &state.db,
-                &user.org_id,
-                ext_id,
-            ).await?;
+            let existing_chat = find_chat_by_external_id(&state.db, &user.org_id, ext_id).await?;
 
             (existing_chat.map(|c| c.id), None, Some(ext_id.clone()))
         }
@@ -576,26 +646,50 @@ pub async fn chat_handler(
     };
 
     // Extract agent config: agent.* > req.* (backward compat)
-    let (target_slug, req_model, req_tools, req_sys_prompt, req_stream, req_memory) = if let Some(agent_conf) = &req.agent {
-        let slug = agent_conf.slug.clone()
-            .or(agent_conf.id.map(|u| u.to_string()))
-            .unwrap_or_else(|| "default".to_string());
-        // 优先使用 agent.* 的值，回退到顶层 req.* (deprecated)
-        let model = agent_conf.model.clone().or_else(|| req.model.clone());
-        let tools = agent_conf.tools.clone().or_else(|| req.tools.clone());
-        let stream = agent_conf.stream.or(req.stream).unwrap_or(true);
-        let memory = agent_conf.memory.or(req.memory).unwrap_or(true);
-        (slug, model, tools, agent_conf.system_prompt.clone(), stream, memory)
-    } else if let Some(agent_id) = handle_agent_id {
-        // If @handle resolved to agent, use that agent's ID as slug
-        let stream = req.stream.unwrap_or(true);
-        let memory = req.memory.unwrap_or(true);
-        (agent_id.to_string(), req.model.clone(), req.tools.clone(), None, stream, memory)
-    } else {
-        let stream = req.stream.unwrap_or(true);
-        let memory = req.memory.unwrap_or(true);
-        ("default".to_string(), req.model.clone(), req.tools.clone(), None, stream, memory)
-    };
+    let (target_slug, req_model, req_tools, req_sys_prompt, req_stream, req_memory) =
+        if let Some(agent_conf) = &req.agent {
+            let slug = agent_conf
+                .slug
+                .clone()
+                .or(agent_conf.id.map(|u| u.to_string()))
+                .unwrap_or_else(|| "default".to_string());
+            // 优先使用 agent.* 的值，回退到顶层 req.* (deprecated)
+            let model = agent_conf.model.clone().or_else(|| req.model.clone());
+            let tools = agent_conf.tools.clone().or_else(|| req.tools.clone());
+            let stream = agent_conf.stream.or(req.stream).unwrap_or(true);
+            let memory = agent_conf.memory.or(req.memory).unwrap_or(true);
+            (
+                slug,
+                model,
+                tools,
+                agent_conf.system_prompt.clone(),
+                stream,
+                memory,
+            )
+        } else if let Some(agent_id) = handle_agent_id {
+            // If @handle resolved to agent, use that agent's ID as slug
+            let stream = req.stream.unwrap_or(true);
+            let memory = req.memory.unwrap_or(true);
+            (
+                agent_id.to_string(),
+                req.model.clone(),
+                req.tools.clone(),
+                None,
+                stream,
+                memory,
+            )
+        } else {
+            let stream = req.stream.unwrap_or(true);
+            let memory = req.memory.unwrap_or(true);
+            (
+                "default".to_string(),
+                req.model.clone(),
+                req.tools.clone(),
+                None,
+                stream,
+                memory,
+            )
+        };
 
     let should_use_memory = global_enable_memory && req_memory;
 
@@ -608,10 +702,10 @@ pub async fn chat_handler(
                     .add(
                         Condition::all()
                             .add(agents::Column::OrgId.eq(&user.org_id))
-                            .add(agents::Column::UserId.eq(user.id))
+                            .add(agents::Column::UserId.eq(user.id)),
                     )
                     .add(agents::Column::OrgId.eq(crate::official_org_slug()))
-                    .add(agents::Column::IsPublic.eq(true))
+                    .add(agents::Column::IsPublic.eq(true)),
             )
             .one(&state.db)
             .await?
@@ -624,15 +718,18 @@ pub async fn chat_handler(
                     .add(
                         Condition::all()
                             .add(agents::Column::OrgId.eq(&user.org_id))
-                            .add(agents::Column::UserId.eq(user.id))
+                            .add(agents::Column::UserId.eq(user.id)),
                     )
                     .add(agents::Column::OrgId.eq(crate::official_org_slug()))
-                    .add(agents::Column::IsPublic.eq(true)) // Allow public agents
+                    .add(agents::Column::IsPublic.eq(true)), // Allow public agents
             )
             .one(&state.db)
             .await?
     };
-    tracing::info!("⏱ [Chat] Agent lookup: {}ms", start_time.elapsed().as_millis());
+    tracing::info!(
+        "⏱ [Chat] Agent lookup: {}ms",
+        start_time.elapsed().as_millis()
+    );
 
     // 检查 agent 是否关联了 workflow，如果是则转发到 workflow endpoint
     if let Some(ref agent) = agent_opt {
@@ -640,21 +737,26 @@ pub async fn chat_handler(
             let workflow = workflows::Entity::find_by_id(workflow_id)
                 .one(&state.db)
                 .await?
-                .ok_or_else(|| AppError::NotFound(format!(
-                    "Workflow '{}' not found for agent '{}'", workflow_id, target_slug
-                )))?;
+                .ok_or_else(|| {
+                    AppError::NotFound(format!(
+                        "Workflow '{}' not found for agent '{}'",
+                        workflow_id, target_slug
+                    ))
+                })?;
 
             // 检查 workflow 是否激活
             if workflow.is_active != Some(true) {
                 return Err(AppError::BadRequest(format!(
-                    "Workflow '{}' is not active", workflow.slug
+                    "Workflow '{}' is not active",
+                    workflow.slug
                 )));
             }
 
             // 检查 workflow 是否有 endpoint
             let endpoint_url = workflow.endpoint_url.as_ref().ok_or_else(|| {
                 AppError::BadRequest(format!(
-                    "Workflow '{}' has no endpoint configured", workflow.slug
+                    "Workflow '{}' has no endpoint configured",
+                    workflow.slug
                 ))
             })?;
 
@@ -665,12 +767,17 @@ pub async fn chat_handler(
                     let chat = chats::Entity::find_by_id(id)
                         .filter(chats::Column::OrgId.eq(&user.org_id))
                         .filter(chats::Column::UserId.eq(user.id))
-                        .one(&state.db).await?;
+                        .one(&state.db)
+                        .await?;
                     match chat {
                         Some(c) => (id, c.last_message_id.unwrap_or(0)),
                         None => {
                             // Chat not found — workflow sub-agent may inherit stale parent chat_id
-                            tracing::warn!("Chat {} not found for user {}, creating new chat", id, user.id);
+                            tracing::warn!(
+                                "Chat {} not found for user {}, creating new chat",
+                                id,
+                                user.id
+                            );
                             let new_chat = chats::ActiveModel {
                                 id: Set(Uuid::new_v4()),
                                 org_id: Set(Some(user.org_id.clone())),
@@ -684,9 +791,11 @@ pub async fn chat_handler(
                             (new_chat.insert(&state.db).await?.id, 0)
                         }
                     }
-                },
+                }
                 None => {
-                    let title_text = req.messages.iter()
+                    let title_text = req
+                        .messages
+                        .iter()
                         .find(|p| p.part_type == "text")
                         .and_then(|p| p.content.clone())
                         .unwrap_or_else(|| "New Chat".to_string());
@@ -708,7 +817,9 @@ pub async fn chat_handler(
             };
 
             // 保存用户原始消息 — 解析组合语法，取 input_state
-            let wf_state_raw = req.state.clone()
+            let wf_state_raw = req
+                .state
+                .clone()
                 .unwrap_or_else(|| messages::states::CONTEXT_VISIBLE.to_string());
             let wf_input_state = match wf_state_raw.split_once(':') {
                 Some((i, _)) => i.to_string(),
@@ -730,7 +841,10 @@ pub async fn chat_handler(
 
             // 更新 chat.last_message_id
             chats::Entity::update_many()
-                .col_expr(chats::Column::LastMessageId, sea_orm::sea_query::Expr::value(user_message_id))
+                .col_expr(
+                    chats::Column::LastMessageId,
+                    sea_orm::sea_query::Expr::value(user_message_id),
+                )
                 .filter(chats::Column::Id.eq(chat_id))
                 .exec(&state.db)
                 .await?;
@@ -738,19 +852,21 @@ pub async fn chat_handler(
 
             // 转发到 workflow endpoint
             // endpoint_url 可能是 base URL 或包含 /api/chat，统一处理
-            let base_url = endpoint_url.trim_end_matches('/').trim_end_matches("/api/chat");
+            let base_url = endpoint_url
+                .trim_end_matches('/')
+                .trim_end_matches("/api/chat");
             let chat_url = format!("{}/api/chat", base_url);
 
             // 生成 Execution Token，用于 juglans-agent 回调时验证原始调用者
             let execution_token = {
                 let author_user_id = agent.user_id.unwrap_or(user.id);
                 let claims = ExecutionClaims::new(
-                    user.id,                    // caller_user_id
-                    user.org_id.clone(),        // caller_org_id
-                    author_user_id,             // author_user_id
-                    agent.id,                   // agent_id
-                    Some(chat_id),              // chat_id (现在有真实的)
-                    300,                        // TTL: 5 分钟
+                    user.id,             // caller_user_id
+                    user.org_id.clone(), // caller_org_id
+                    author_user_id,      // author_user_id
+                    agent.id,            // agent_id
+                    Some(chat_id),       // chat_id (现在有真实的)
+                    300,                 // TTL: 5 分钟
                 );
                 claims.encode(&state.signing_key)
             };
@@ -761,11 +877,14 @@ pub async fn chat_handler(
             );
 
             // Cache workflow forward info for tool_result routing (zero-DB-query path)
-            state.workflow_forwards.insert(chat_id, WorkflowForwardInfo {
-                endpoint_url: endpoint_url.clone(),
-                agent_id: agent.id,
-                author_user_id: agent.user_id.unwrap_or(user.id),
-            });
+            state.workflow_forwards.insert(
+                chat_id,
+                WorkflowForwardInfo {
+                    endpoint_url: endpoint_url.clone(),
+                    agent_id: agent.id,
+                    author_user_id: agent.user_id.unwrap_or(user.id),
+                },
+            );
 
             return forward_to_workflow(
                 &state.http_client,
@@ -773,28 +892,37 @@ pub async fn chat_handler(
                 &req,
                 req_stream,
                 Some(execution_token),
-                Some(chat_id),  // 传递 jug0 创建的 chat_id，确保 workflow 使用同一个会话
-                Some(user_message_id),  // 传递用户消息 ID，供 workflow 回溯更新状态
-                Some(user_message_uuid),  // 传递用户消息 UUID，注入到 meta SSE 事件
-            ).await;
+                Some(chat_id), // 传递 jug0 创建的 chat_id，确保 workflow 使用同一个会话
+                Some(user_message_id), // 传递用户消息 ID，供 workflow 回溯更新状态
+                Some(user_message_uuid), // 传递用户消息 UUID，注入到 meta SSE 事件
+            )
+            .await;
         }
     }
 
     let (agent_id, final_model, mcp_config_json, final_sys_prompt) = match agent_opt {
         Some(a) => {
-            let model = req_model.or(a.default_model).unwrap_or(default_model.clone());
+            let model = req_model
+                .or(a.default_model)
+                .unwrap_or(default_model.clone());
             let sys_prompt = if let Some(sp) = req_sys_prompt {
                 Some(sp)
             } else if let Some(sp_id) = a.system_prompt_id {
-                prompts::Entity::find_by_id(sp_id).one(&state.db).await?.map(|m| m.content)
+                prompts::Entity::find_by_id(sp_id)
+                    .one(&state.db)
+                    .await?
+                    .map(|m| m.content)
             } else {
                 None
             };
             (Some(a.id), model, a.mcp_config, sys_prompt)
-        },
+        }
         None => {
             if req_model.is_none() && req_sys_prompt.is_none() && target_slug != "default" {
-                 return Err(AppError::NotFound(format!("Agent '{}' not found", target_slug)));
+                return Err(AppError::NotFound(format!(
+                    "Agent '{}' not found",
+                    target_slug
+                )));
             }
             let model = req_model.unwrap_or(default_model.clone());
             (None, model, None, req_sys_prompt)
@@ -812,7 +940,11 @@ pub async fn chat_handler(
             }
         }
     }
-    tracing::info!("⏱ [Chat] MCP tools fetch: {}ms (server_tools: {})", start_time.elapsed().as_millis(), server_tools.len());
+    tracing::info!(
+        "⏱ [Chat] MCP tools fetch: {}ms (server_tools: {})",
+        start_time.elapsed().as_millis(),
+        server_tools.len()
+    );
 
     // 获取或创建 chat，同时获取 last_message_id
     let is_incognito = matches!(&req.history, Some(serde_json::Value::Bool(false)));
@@ -821,13 +953,20 @@ pub async fn chat_handler(
             let chat = chats::Entity::find_by_id(id)
                 .filter(chats::Column::OrgId.eq(&user.org_id))
                 .filter(chats::Column::UserId.eq(user.id))
-                .one(&state.db).await?;
+                .one(&state.db)
+                .await?;
             match chat {
                 Some(c) => (id, c.last_message_id.unwrap_or(0)),
                 None => {
                     // Chat not found — workflow sub-agent may inherit stale parent chat_id
-                    tracing::warn!("Chat {} not found for user {}, creating new chat", id, user.id);
-                    let title_text = req.messages.iter()
+                    tracing::warn!(
+                        "Chat {} not found for user {}, creating new chat",
+                        id,
+                        user.id
+                    );
+                    let title_text = req
+                        .messages
+                        .iter()
                         .find(|p| p.part_type == "text")
                         .and_then(|p| p.content.clone())
                         .unwrap_or_else(|| "New Chat".to_string());
@@ -846,9 +985,11 @@ pub async fn chat_handler(
                     (new_chat.insert(&state.db).await?.id, 0)
                 }
             }
-        },
+        }
         None => {
-            let title_text = req.messages.iter()
+            let title_text = req
+                .messages
+                .iter()
                 .find(|p| p.part_type == "text")
                 .and_then(|p| p.content.clone())
                 .unwrap_or_else(|| "New Chat".to_string());
@@ -868,7 +1009,11 @@ pub async fn chat_handler(
             (new_chat.insert(&state.db).await?.id, 0)
         }
     };
-    tracing::info!("⏱ [Chat] Chat init: {}ms (chat_id: {})", start_time.elapsed().as_millis(), chat_id);
+    tracing::info!(
+        "⏱ [Chat] Chat init: {}ms (chat_id: {})",
+        start_time.elapsed().as_millis(),
+        chat_id
+    );
 
     if let Some(old_token) = state.active_requests.get(&chat_id) {
         old_token.cancel();
@@ -879,7 +1024,10 @@ pub async fn chat_handler(
         if !tools.is_empty() {
             let metadata = json!({ "client_tools": tools });
             chats::Entity::update_many()
-                .col_expr(chats::Column::Metadata, sea_orm::sea_query::Expr::value(metadata))
+                .col_expr(
+                    chats::Column::Metadata,
+                    sea_orm::sea_query::Expr::value(metadata),
+                )
                 .filter(chats::Column::Id.eq(chat_id))
                 .exec(&state.db)
                 .await?;
@@ -887,7 +1035,9 @@ pub async fn chat_handler(
     }
 
     // 解析 state 组合语法（input:output），默认 context_visible
-    let state_raw = req.state.clone()
+    let state_raw = req
+        .state
+        .clone()
         .unwrap_or_else(|| messages::states::CONTEXT_VISIBLE.to_string());
     let (input_state, output_state) = match state_raw.split_once(':') {
         Some((i, o)) => (i.to_string(), o.to_string()),
@@ -895,9 +1045,17 @@ pub async fn chat_handler(
     };
 
     // 保存用户消息（分配 message_id）— 用 input_state
-    let is_tool_result = req.messages.first().map(|p| p.part_type == "tool_result").unwrap_or(false);
+    let is_tool_result = req
+        .messages
+        .first()
+        .map(|p| p.part_type == "tool_result")
+        .unwrap_or(false);
     let role = if is_tool_result { "tool" } else { "user" };
-    let message_type = if is_tool_result { "tool_result" } else { "chat" };
+    let message_type = if is_tool_result {
+        "tool_result"
+    } else {
+        "chat"
+    };
 
     last_message_id += 1;
     let user_message_id = last_message_id;
@@ -911,14 +1069,21 @@ pub async fn chat_handler(
         message_type: Set(message_type.to_string()),
         state: Set(input_state),
         parts: Set(serde_json::to_value(&req.messages)?),
-        tool_call_id: Set(if is_tool_result { req.messages.first().and_then(|p| p.tool_call_id.clone()) } else { None }),
+        tool_call_id: Set(if is_tool_result {
+            req.messages.first().and_then(|p| p.tool_call_id.clone())
+        } else {
+            None
+        }),
         ..Default::default()
     };
     user_msg.insert(&state.db).await?;
 
     // 更新 chat.last_message_id
     chats::Entity::update_many()
-        .col_expr(chats::Column::LastMessageId, sea_orm::sea_query::Expr::value(user_message_id))
+        .col_expr(
+            chats::Column::LastMessageId,
+            sea_orm::sea_query::Expr::value(user_message_id),
+        )
         .filter(chats::Column::Id.eq(chat_id))
         .exec(&state.db)
         .await?;
@@ -949,72 +1114,86 @@ pub async fn chat_handler(
         state.memory_service.clone(),
         user.clone(),
         chat_id,
-        last_message_id,  // 传递当前 last_message_id
+        last_message_id,   // 传递当前 last_message_id
         user_message_uuid, // 传递用户消息 UUID
         final_model,
         final_sys_prompt,
         req_tools,
         server_tools,
         should_use_memory,
-        req.history.clone(),   // 上下文控制
-        output_state,          // AI 回复的消息状态
+        req.history.clone(), // 上下文控制
+        output_state,        // AI 回复的消息状态
         tool_result_rx,
         state.tool_result_channels.clone(),
     );
-    tracing::info!("⏱ [Chat] Stream setup: {}ms — handing off to SSE", start_time.elapsed().as_millis());
+    tracing::info!(
+        "⏱ [Chat] Stream setup: {}ms — handing off to SSE",
+        start_time.elapsed().as_millis()
+    );
 
     if req_stream {
-        let sse_stream = internal_stream.map(move |res| {
-            match res {
-                Ok(event) => match event {
-                    InternalStreamEvent::Meta { chat_id, user_message_id, user_message_uuid } => Ok::<Event, AppError>(
-                        Event::default()
-                            .event("meta")
-                            .data(json!({
-                                "type": "meta",
-                                "chat_id": chat_id,
-                                "user_message_id": user_message_id,
-                                "user_message_uuid": user_message_uuid
-                            }).to_string())
+        let sse_stream = internal_stream.map(move |res| match res {
+            Ok(event) => match event {
+                InternalStreamEvent::Meta {
+                    chat_id,
+                    user_message_id,
+                    user_message_uuid,
+                } => Ok::<Event, AppError>(
+                    Event::default().event("meta").data(
+                        json!({
+                            "type": "meta",
+                            "chat_id": chat_id,
+                            "user_message_id": user_message_id,
+                            "user_message_uuid": user_message_uuid
+                        })
+                        .to_string(),
                     ),
-                    InternalStreamEvent::Content(text) => Ok::<Event, AppError>(
-                        Event::default()
-                            .data(json!({ "type": "content", "text": text }).to_string())
+                ),
+                InternalStreamEvent::Content(text) => Ok::<Event, AppError>(
+                    Event::default().data(json!({ "type": "content", "text": text }).to_string()),
+                ),
+                InternalStreamEvent::ToolCall { message_id, tools } => Ok::<Event, AppError>(
+                    Event::default().event("tool_call").data(
+                        json!({
+                            "type": "tool_call",
+                            "call_id": chat_id.to_string(),
+                            "message_id": message_id,
+                            "tools": tools
+                        })
+                        .to_string(),
                     ),
-                    InternalStreamEvent::ToolCall { message_id, tools } => Ok::<Event, AppError>(
-                        Event::default()
-                            .event("tool_call")
-                            .data(json!({
-                                "type": "tool_call",
-                                "call_id": chat_id.to_string(),
+                ),
+                InternalStreamEvent::Done {
+                    message_id,
+                    assistant_message_uuid,
+                } => {
+                    let duration_ms = start_time.elapsed().as_millis();
+                    tracing::info!(
+                        "✅ Chat completed in {}ms (message_id: {})",
+                        duration_ms,
+                        message_id
+                    );
+                    Ok::<Event, AppError>(
+                        Event::default().event("done").data(
+                            json!({
+                                "type": "done",
                                 "message_id": message_id,
-                                "tools": tools
-                            }).to_string())
-                    ),
-                    InternalStreamEvent::Done { message_id, assistant_message_uuid } => {
-                        let duration_ms = start_time.elapsed().as_millis();
-                        tracing::info!("✅ Chat completed in {}ms (message_id: {})", duration_ms, message_id);
-                        Ok::<Event, AppError>(
-                            Event::default()
-                                .event("done")
-                                .data(json!({
-                                    "type": "done",
-                                    "message_id": message_id,
-                                    "assistant_message_uuid": assistant_message_uuid,
-                                    "duration_ms": duration_ms
-                                }).to_string())
-                        )
-                    },
-                    InternalStreamEvent::Error(err) => Ok::<Event, AppError>(
-                        Event::default()
-                            .event("error")
-                            .data(err)
-                    ),
-                },
-                Err(e) => Ok::<Event, AppError>(Event::default().event("error").data(e.to_string())),
-            }
+                                "assistant_message_uuid": assistant_message_uuid,
+                                "duration_ms": duration_ms
+                            })
+                            .to_string(),
+                        ),
+                    )
+                }
+                InternalStreamEvent::Error(err) => {
+                    Ok::<Event, AppError>(Event::default().event("error").data(err))
+                }
+            },
+            Err(e) => Ok::<Event, AppError>(Event::default().event("error").data(e.to_string())),
         });
-        Ok(Sse::new(sse_stream).keep_alive(axum::response::sse::KeepAlive::default()).into_response())
+        Ok(Sse::new(sse_stream)
+            .keep_alive(axum::response::sse::KeepAlive::default())
+            .into_response())
     } else {
         let mut final_content = String::new();
         let mut tool_calls = None;
@@ -1025,26 +1204,35 @@ pub async fn chat_handler(
         while let Some(event_res) = pinned_stream.next().await {
             match event_res {
                 Ok(event) => match event {
-                    InternalStreamEvent::Meta { user_message_id, .. } => {
+                    InternalStreamEvent::Meta {
+                        user_message_id, ..
+                    } => {
                         final_message_id = user_message_id;
-                    },
+                    }
                     InternalStreamEvent::Content(text) => final_content.push_str(&text),
                     InternalStreamEvent::ToolCall { message_id, tools } => {
                         resp_role = "tool_call".to_string();
                         tool_calls = Some(tools);
                         final_message_id = message_id;
-                    },
+                    }
                     InternalStreamEvent::Done { message_id, .. } => {
                         final_message_id = message_id;
-                    },
-                    InternalStreamEvent::Error(err) => return Err(AppError::Internal(anyhow::anyhow!("Chat Error: {}", err))),
+                    }
+                    InternalStreamEvent::Error(err) => {
+                        return Err(AppError::Internal(anyhow::anyhow!("Chat Error: {}", err)))
+                    }
                 },
                 Err(e) => return Err(e),
             }
         }
 
         let duration_ms = start_time.elapsed().as_millis();
-        tracing::info!("✅ Chat completed in {}ms (chat_id: {}, message_id: {})", duration_ms, chat_id, final_message_id);
+        tracing::info!(
+            "✅ Chat completed in {}ms (chat_id: {}, message_id: {})",
+            duration_ms,
+            chat_id,
+            final_message_id
+        );
 
         Ok(Json(ChatSyncResponse {
             chat_id,
@@ -1052,6 +1240,7 @@ pub async fn chat_handler(
             role: resp_role,
             content: final_content,
             tool_calls,
-        }).into_response())
+        })
+        .into_response())
     }
 }

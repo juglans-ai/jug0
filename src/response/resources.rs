@@ -2,9 +2,9 @@
 //
 // Unified resource response types for /:owner/:slug pattern
 
-use serde::Serialize;
-use crate::entities::{prompts, agents, workflows};
 use super::common::OwnerInfo;
+use crate::entities::{agents, prompts, workflows};
+use serde::Serialize;
 
 /// Prompt with owner (for resource endpoint)
 #[derive(Debug, Serialize)]

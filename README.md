@@ -54,7 +54,7 @@ cp .env.example .env
 # Edit .env with your LLM API keys
 
 # Run database migrations
-psql $DATABASE_URL < db/schema.sql
+cargo run -p migration -- up
 
 # Start jug0
 cargo run --release
@@ -151,7 +151,7 @@ Key variables:
 ## Tech Stack
 
 - **Rust** + **Axum** 0.7 — async HTTP with SSE streaming
-- **SeaORM** — PostgreSQL ORM with migrations
+- **SeaORM** — database-agnostic ORM (PostgreSQL, MySQL, SQLite)
 - **Qdrant** — vector similarity search
 - **Redis** — caching and session storage
 - **async-openai** — OpenAI-compatible client

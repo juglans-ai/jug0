@@ -1,8 +1,8 @@
 // src/providers/storage/mod.rs
 pub mod postgres;
 
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 use serde_json::Value;
 
 /// Trait for persistent storage backends (e.g., PostgreSQL, SQLite).

@@ -19,7 +19,7 @@ docker compose up -d postgres redis qdrant
 cp .env.example .env
 
 # Run migrations
-psql $DATABASE_URL < db/schema.sql
+cargo run -p migration -- up
 
 # Build and run
 cargo run

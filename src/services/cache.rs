@@ -1,7 +1,7 @@
 // src/services/cache.rs
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Serialize};
 
 #[derive(Clone)]
 pub struct CacheService {
@@ -23,10 +23,20 @@ impl CacheService {
     }
 
     /// SET key json_value (with optional TTL, 0 = no expiry)
-    pub async fn set<T: Serialize>(&self, key: &str, value: &T, ttl_secs: u64) -> Result<(), redis::RedisError> {
+    pub async fn set<T: Serialize>(
+        &self,
+        key: &str,
+        value: &T,
+        ttl_secs: u64,
+    ) -> Result<(), redis::RedisError> {
         let mut conn = self.conn.clone();
-        let json = serde_json::to_string(value)
-            .map_err(|e| redis::RedisError::from((redis::ErrorKind::IoError, "JSON serialization failed", e.to_string())))?;
+        let json = serde_json::to_string(value).map_err(|e| {
+            redis::RedisError::from((
+                redis::ErrorKind::IoError,
+                "JSON serialization failed",
+                e.to_string(),
+            ))
+        })?;
         if ttl_secs == 0 {
             conn.set(key, json).await
         } else {

@@ -1,10 +1,10 @@
 // src/providers/embedding/qwen.rs
 use super::EmbeddingProvider;
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
-use reqwest::Client;
 
 pub struct QwenEmbedding {
     client: Client,
@@ -26,7 +26,7 @@ struct QwenEmbeddingInput {
 #[derive(Deserialize)]
 struct QwenEmbeddingResponse {
     output: QwenEmbeddingOutput,
-    // usage: Value, 
+    // usage: Value,
     // request_id: String,
 }
 
@@ -46,7 +46,8 @@ impl QwenEmbedding {
         Self {
             client: Client::new(),
             api_key: env::var("DASHSCOPE_API_KEY").expect("DASHSCOPE_API_KEY not set"),
-            model: env::var("MEMORY_EMBEDDING_MODEL").unwrap_or_else(|_| "text-embedding-v2".to_string()),
+            model: env::var("MEMORY_EMBEDDING_MODEL")
+                .unwrap_or_else(|_| "text-embedding-v2".to_string()),
         }
     }
 }
@@ -56,26 +57,34 @@ impl EmbeddingProvider for QwenEmbedding {
     fn dimension(&self) -> u64 {
         // v3 可以指定维度，但 v1/v2 默认是 1536，v3 默认也是 1024 或 1536 取决于参数
         // 这里暂时硬编码，如果用 v3 且需要其他维度，需修改 MemoryService 的配置
-        1536 
+        1536
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let res = self.embed_batch(vec![text.to_string()]).await?;
-        res.into_iter().next().ok_or_else(|| anyhow::anyhow!("No embedding returned"))
+        res.into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No embedding returned"))
     }
 
     async fn embed_batch(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         // 修正：将 'aigc' 改为 'embeddings'
         let url = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding";
-        
-        tracing::debug!("Qwen Embedding: Requesting batch of size {} using model {}", texts.len(), self.model);
+
+        tracing::debug!(
+            "Qwen Embedding: Requesting batch of size {} using model {}",
+            texts.len(),
+            self.model
+        );
 
         let request = QwenEmbeddingRequest {
             model: self.model.clone(),
             input: QwenEmbeddingInput { texts },
         };
 
-        let response = self.client.post(url)
+        let response = self
+            .client
+            .post(url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json") // 显式添加 Content-Type
             .json(&request)
@@ -89,7 +98,7 @@ impl EmbeddingProvider for QwenEmbedding {
         }
 
         let body: QwenEmbeddingResponse = response.json().await?;
-        
+
         // 确保结果按输入顺序排序（DashScope 可能会乱序返回，通过 text_index 排序）
         let mut sorted_res = body.output.embeddings;
         sorted_res.sort_by_key(|e| e.text_index);

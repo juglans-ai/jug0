@@ -7,31 +7,31 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
-    
+
     pub org_id: Option<String>, // 新增
     pub user_id: Option<Uuid>,  // 变更 UUID
-    
+
     pub slug: String,
-    pub name: Option<String>, 
-    
+    pub name: Option<String>,
+
     #[sea_orm(column_type = "Text")]
     pub content: String,
-    
+
     #[sea_orm(column_type = "JsonBinary")]
     pub input_variables: Option<serde_json::Value>,
-    
+
     pub r#type: Option<String>,
-    
+
     #[sea_orm(column_type = "JsonBinary")]
     pub tags: Option<serde_json::Value>,
 
     #[sea_orm(column_type = "JsonBinary")]
     pub allowed_agent_slugs: Option<serde_json::Value>,
-    
+
     pub is_public: bool,
     pub is_system: bool,
     pub usage_count: i32,
-    
+
     pub created_at: Option<DateTime>,
     pub updated_at: Option<DateTime>,
 }

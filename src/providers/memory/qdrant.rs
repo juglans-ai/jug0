@@ -45,11 +45,14 @@ impl MemoryProvider for QdrantMemory {
     }
 
     async fn upsert(&self, collection: &str, points: Vec<MemoryPoint>) -> Result<()> {
-        let points_data: Vec<(Uuid, Vec<f32>, HashMap<String, qdrant_client::qdrant::Value>)> =
-            points
-                .into_iter()
-                .map(|p| (p.id, p.vector, json_payload_to_qdrant(p.payload)))
-                .collect();
+        let points_data: Vec<(
+            Uuid,
+            Vec<f32>,
+            HashMap<String, qdrant_client::qdrant::Value>,
+        )> = points
+            .into_iter()
+            .map(|p| (p.id, p.vector, json_payload_to_qdrant(p.payload)))
+            .collect();
         self.inner.upsert_points(collection, points_data).await
     }
 

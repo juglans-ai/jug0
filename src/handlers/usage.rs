@@ -3,16 +3,16 @@
 // Usage statistics handler - aggregates token usage from message metadata
 
 use axum::{extract::Extension, Json};
+use chrono::{Datelike, NaiveDateTime, NaiveTime, Utc};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-use std::sync::Arc;
 use std::collections::HashMap;
-use chrono::{Utc, Datelike, NaiveDateTime, NaiveTime};
+use std::sync::Arc;
 
-use crate::entities::{chats, messages};
 use crate::auth::AuthUser;
-use crate::AppState;
+use crate::entities::{chats, messages};
 use crate::errors::AppError;
-use crate::response::{UsageStats, ModelUsage};
+use crate::response::{ModelUsage, UsageStats};
+use crate::AppState;
 
 /// GET /api/usage/stats
 ///
@@ -65,14 +65,21 @@ pub async fn get_usage_stats(
 
     for msg in user_messages {
         if let Some(metadata) = msg.metadata {
-            let model = metadata.get("model")
+            let model = metadata
+                .get("model")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
 
             if let Some(usage) = metadata.get("usage") {
-                let input = usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-                let output = usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                let input = usage
+                    .get("input_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let output = usage
+                    .get("output_tokens")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
 
                 total_input += input;
                 total_output += output;

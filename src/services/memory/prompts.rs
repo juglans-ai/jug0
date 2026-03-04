@@ -13,7 +13,8 @@ Here are the details of the task:
 
 pub fn fact_retrieval_prompt() -> String {
     let date = Local::now().format("%Y-%m-%d").to_string();
-    format!(r#"You are a Personal Information Organizer, specialized in accurately storing facts, user memories, and preferences. Your primary role is to extract relevant pieces of information from conversations and organize them into distinct, manageable facts. This allows for easy retrieval and personalization in future interactions. Below are the types of information you need to focus on and the detailed instructions on how to handle the input data.
+    format!(
+        r#"You are a Personal Information Organizer, specialized in accurately storing facts, user memories, and preferences. Your primary role is to extract relevant pieces of information from conversations and organize them into distinct, manageable facts. This allows for easy retrieval and personalization in future interactions. Below are the types of information you need to focus on and the detailed instructions on how to handle the input data.
 
 Types of Information to Remember:
 
@@ -58,13 +59,16 @@ Remember the following:
 
 Following is a conversation between the user and the assistant. You have to extract the relevant facts and preferences about the user, if any, from the conversation and return them in the json format as shown above.
 You should detect the language of the user input and record the facts in the same language.
-"#, date)
+"#,
+        date
+    )
 }
 
 // USER_MEMORY_EXTRACTION_PROMPT - Enhanced version based on platform implementation
 pub fn user_memory_extraction_prompt() -> String {
     let date = Local::now().format("%Y-%m-%d").to_string();
-    format!(r#"You are a Personal Information Organizer, specialized in accurately storing facts, user memories, and preferences. 
+    format!(
+        r#"You are a Personal Information Organizer, specialized in accurately storing facts, user memories, and preferences. 
 Your primary role is to extract relevant pieces of information from conversations and organize them into distinct, manageable facts. 
 This allows for easy retrieval and personalization in future interactions. Below are the types of information you need to focus on and the detailed instructions on how to handle the input data.
 
@@ -122,13 +126,16 @@ Remember the following:
 - You should detect the language of the user input and record the facts in the same language.
 
 Following is a conversation between the user and the assistant. You have to extract the relevant facts and preferences about the user, if any, from the conversation and return them in the json format as shown above.
-"#, date)
+"#,
+        date
+    )
 }
 
 // AGENT_MEMORY_EXTRACTION_PROMPT - Enhanced version based on platform implementation
 pub fn agent_memory_extraction_prompt() -> String {
     let date = Local::now().format("%Y-%m-%d").to_string();
-    format!(r#"You are an Assistant Information Organizer, specialized in accurately storing facts, preferences, and characteristics about the AI assistant from conversations. 
+    format!(
+        r#"You are an Assistant Information Organizer, specialized in accurately storing facts, preferences, and characteristics about the AI assistant from conversations. 
 Your primary role is to extract relevant pieces of information about the assistant from conversations and organize them into distinct, manageable facts. 
 This allows for easy retrieval and characterization of the assistant in future interactions. Below are the types of information you need to focus on and the detailed instructions on how to handle the input data.
 
@@ -178,7 +185,9 @@ Remember the following:
 - You should detect the language of the assistant input and record the facts in the same language.
 
 Following is a conversation between the user and the assistant. You have to extract the relevant facts and preferences about the assistant, if any, from the conversation and return them in the json format as shown above.
-"#, date)
+"#,
+        date
+    )
 }
 
 pub const DEFAULT_UPDATE_MEMORY_PROMPT: &str = r#"You are a smart memory manager which controls the memory of a system.
@@ -431,7 +440,8 @@ pub fn get_update_memory_messages(
     } else {
         r#"
     Current memory is empty.
-    "#.to_string()
+    "#
+        .to_string()
     };
 
     format!(

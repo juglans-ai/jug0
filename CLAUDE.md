@@ -2,7 +2,7 @@
 
 ## Tech Stack
 
-Rust, Axum 0.7, SeaORM (PostgreSQL), async-openai, qdrant-client, DashMap, tokio
+Rust, Axum 0.7, SeaORM (PostgreSQL/MySQL/SQLite), async-openai, qdrant-client, DashMap, tokio
 
 ## Build & Run
 
@@ -10,6 +10,8 @@ Rust, Axum 0.7, SeaORM (PostgreSQL), async-openai, qdrant-client, DashMap, tokio
 cargo build            # 编译
 cargo run              # 启动 (默认 :3000)
 RUST_LOG=jug0=debug cargo run   # 带 debug 日志
+cargo run -p migration -- up    # 执行数据库迁移
+cargo run -p migration -- status  # 查看迁移状态
 ```
 
 ## Project Structure

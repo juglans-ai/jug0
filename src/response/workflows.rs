@@ -2,10 +2,10 @@
 //
 // Workflow-related response types
 
+use super::common::OwnerInfo;
+use crate::entities::workflows;
 use serde::Serialize;
 use uuid::Uuid;
-use crate::entities::workflows;
-use super::common::OwnerInfo;
 
 /// Workflow with owner information for list responses
 #[derive(Debug, Serialize)]

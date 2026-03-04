@@ -1,14 +1,16 @@
 // src/providers/mod.rs
-pub mod llm;
-pub mod embedding;
-pub mod memory;
-pub mod storage;
 pub mod cache;
+pub mod embedding;
+pub mod llm;
+pub mod memory;
+pub mod search;
+pub mod storage;
 
 // Re-export commonly used types for backward compatibility
-pub use llm::{LlmProvider, ChatStreamChunk, TokenUsage, ToolCallChunk};
-pub use llm::factory::ProviderFactory;
-pub use embedding::{EmbeddingProvider, EmbeddingFactory};
-pub use memory::MemoryProvider;
-pub use storage::StorageProvider;
 pub use cache::CacheProvider;
+pub use embedding::{EmbeddingFactory, EmbeddingProvider};
+pub use llm::factory::ProviderFactory;
+pub use llm::{ChatStreamChunk, LlmProvider, TokenUsage, ToolCallChunk};
+pub use memory::MemoryProvider;
+pub use search::SearchProvider;
+pub use storage::StorageProvider;

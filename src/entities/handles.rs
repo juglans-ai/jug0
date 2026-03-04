@@ -9,7 +9,7 @@ pub struct Model {
     pub id: Uuid,
     pub org_id: String,
     pub handle: String,
-    pub target_type: String,  // "agent" | "user"
+    pub target_type: String, // "agent" | "user"
     pub target_id: Uuid,
     #[sea_orm(column_type = "TimestampWithTimeZone", nullable)]
     pub created_at: Option<DateTimeWithTimeZone>,

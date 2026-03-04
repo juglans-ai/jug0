@@ -2,9 +2,9 @@
 //
 // Prompt-related response types
 
-use serde::{Deserialize, Serialize};
-use crate::entities::prompts;
 use super::common::OwnerInfo;
+use crate::entities::prompts;
+use serde::{Deserialize, Serialize};
 
 /// Prompt with owner information for list responses
 #[derive(Debug, Serialize, Deserialize)]

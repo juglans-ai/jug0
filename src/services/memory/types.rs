@@ -38,7 +38,7 @@ pub enum MemoryActionType {
 #[derive(Debug, Deserialize, Clone)]
 pub struct MemoryOperation {
     /// 对于 ADD，是新 ID；对于 UPDATE/DELETE，是旧 ID (可能是 integer string 或 uuid string)
-    pub id: Option<String>, 
+    pub id: Option<String>,
     pub text: Option<String>,
     pub event: MemoryActionType,
     pub old_memory: Option<String>,

@@ -1,14 +1,21 @@
 // src/handlers/context.rs
 use axum::{
-    extract::{Path, Extension},
+    extract::{Extension, Path},
     Json,
 };
-use sea_orm::{EntityTrait, QueryFilter, QueryOrder, ModelTrait, ColumnTrait, ActiveModelTrait, Set, ConnectionTrait, Statement, DatabaseBackend};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, ModelTrait,
+    QueryFilter, QueryOrder, Set, Statement,
+};
 use std::sync::Arc;
 
-use crate::{AppState, entities::{chats, messages}, errors::AppError};
 use crate::auth::AuthUser;
 use crate::handlers::chat::resolve_chat_id_strict;
+use crate::{
+    entities::{chats, messages},
+    errors::AppError,
+    AppState,
+};
 
 // GET /api/chat/:id (supports UUID or @handle)
 pub async fn get_history(
@@ -24,7 +31,9 @@ pub async fn get_history(
         .filter(chats::Column::UserId.eq(user.id))
         .one(&state.db)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Chat {} not found or access denied", chat_id)))?;
+        .ok_or_else(|| {
+            AppError::NotFound(format!("Chat {} not found or access denied", chat_id))
+        })?;
 
     // 2. 获取消息列表
     let history = messages::Entity::find()
@@ -53,7 +62,9 @@ pub async fn delete_chat(
         .filter(chats::Column::UserId.eq(user.id))
         .one(&state.db)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Chat {} not found or access denied", chat_id)))?;
+        .ok_or_else(|| {
+            AppError::NotFound(format!("Chat {} not found or access denied", chat_id))
+        })?;
 
     // 2. 删除 (先删消息，再删会话)
     messages::Entity::delete_many()
@@ -63,7 +74,9 @@ pub async fn delete_chat(
 
     chat.delete(&state.db).await?;
 
-    Ok(Json(serde_json::json!({ "status": "deleted", "id": chat_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "deleted", "id": chat_id }),
+    ))
 }
 
 // POST /api/chat/:id/clear — clear old messages, keep current turn
@@ -78,7 +91,9 @@ pub async fn clear_chat_history(
         .filter(chats::Column::UserId.eq(user.id))
         .one(&state.db)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Chat {} not found or access denied", chat_id)))?;
+        .ok_or_else(|| {
+            AppError::NotFound(format!("Chat {} not found or access denied", chat_id))
+        })?;
 
     // 找到最后一条 user message 的 message_id，删除之前的所有消息
     let last_user_msg = messages::Entity::find()
@@ -89,11 +104,14 @@ pub async fn clear_chat_history(
         .await?;
 
     let deleted_count = if let Some(last_user) = last_user_msg {
-        let result = state.db.execute(Statement::from_sql_and_values(
-            DatabaseBackend::Postgres,
-            "DELETE FROM messages WHERE chat_id = $1 AND message_id < $2",
-            [chat_id.into(), last_user.message_id.into()],
-        )).await?;
+        let result = state
+            .db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "DELETE FROM messages WHERE chat_id = $1 AND message_id < $2",
+                [chat_id.into(), last_user.message_id.into()],
+            ))
+            .await?;
         result.rows_affected()
     } else {
         0
@@ -118,7 +136,9 @@ pub async fn clear_chat_messages(
         .filter(chats::Column::UserId.eq(user.id))
         .one(&state.db)
         .await?
-        .ok_or_else(|| AppError::NotFound(format!("Chat {} not found or access denied", chat_id)))?;
+        .ok_or_else(|| {
+            AppError::NotFound(format!("Chat {} not found or access denied", chat_id))
+        })?;
 
     // 只删消息，保留 chat 记录
     let result = messages::Entity::delete_many()

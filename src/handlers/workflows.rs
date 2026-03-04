@@ -1,22 +1,22 @@
 // src/handlers/workflows.rs
 use axum::{
-    extract::{Extension, Path, Json},
+    extract::{Extension, Json, Path},
     Json as AxumJson,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait,
-    QueryFilter, Set, Condition, IntoActiveModel, QueryOrder,
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, IntoActiveModel, QueryFilter,
+    QueryOrder, Set,
 };
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::entities::{workflows, users};
-use crate::AppState;
-use crate::errors::AppError;
 use crate::auth::AuthUser;
-use crate::request::{CreateWorkflowRequest, UpdateWorkflowRequest, ExecuteWorkflowRequest};
-use crate::response::{OwnerInfo, WorkflowWithOwner, ExecuteWorkflowResponse};
+use crate::entities::{users, workflows};
+use crate::errors::AppError;
+use crate::request::{CreateWorkflowRequest, ExecuteWorkflowRequest, UpdateWorkflowRequest};
+use crate::response::{ExecuteWorkflowResponse, OwnerInfo, WorkflowWithOwner};
+use crate::AppState;
 
 // --- Helper: build workflow list from DB ---
 
@@ -31,20 +31,20 @@ async fn build_workflow_list(
                 .add(
                     Condition::all()
                         .add(workflows::Column::OrgId.eq(&user.org_id))
-                        .add(workflows::Column::UserId.eq(user.id))
+                        .add(workflows::Column::UserId.eq(user.id)),
                 )
                 // 2. 本机构下其他人公开的
                 .add(
                     Condition::all()
                         .add(workflows::Column::OrgId.eq(&user.org_id))
-                        .add(workflows::Column::IsPublic.eq(true))
+                        .add(workflows::Column::IsPublic.eq(true)),
                 )
                 // 3. 官方市场的公开 Workflow
                 .add(
                     Condition::all()
                         .add(workflows::Column::OrgId.eq(crate::official_org_slug()))
-                        .add(workflows::Column::IsPublic.eq(true))
-                )
+                        .add(workflows::Column::IsPublic.eq(true)),
+                ),
         )
         .order_by_desc(workflows::Column::CreatedAt)
         .all(&state.db)
@@ -73,7 +73,8 @@ async fn build_workflow_list(
     // Build response with owner info from map (no N+1 queries)
     let mut workflows_with_owners = Vec::new();
     for wf in results {
-        let owner = wf.user_id
+        let owner = wf
+            .user_id
             .and_then(|uid| users_map.get(&uid))
             .map(|u| OwnerInfo {
                 id: u.id,
@@ -81,9 +82,9 @@ async fn build_workflow_list(
                 name: u.name.clone(),
             });
 
-        let url = owner.as_ref().and_then(|o| {
-            o.username.as_ref().map(|u| format!("/{}/{}", u, wf.slug))
-        });
+        let url = owner
+            .as_ref()
+            .and_then(|o| o.username.as_ref().map(|u| format!("/{}/{}", u, wf.slug)));
 
         workflows_with_owners.push(WorkflowWithOwner {
             workflow: wf,
@@ -118,8 +119,12 @@ async fn rebuild_all_workflow_caches(state: &Arc<AppState>) {
                 is_api_key: false,
             };
             match build_workflow_list(state, &user).await {
-                Ok(val) => { let _ = state.cache.set(&key, &val, 300).await; }
-                Err(_) => { let _ = state.cache.del(&key).await; }
+                Ok(val) => {
+                    let _ = state.cache.set(&key, &val, 300).await;
+                }
+                Err(_) => {
+                    let _ = state.cache.del(&key).await;
+                }
             }
         }
     }
@@ -132,7 +137,6 @@ pub async fn list_workflows(
     Extension(state): Extension<Arc<AppState>>,
     user: AuthUser,
 ) -> Result<AxumJson<serde_json::Value>, AppError> {
-
     // Redis cache lookup
     let redis_key = format!("jug0:list:workflows:{}:{}", user.org_id, user.id);
     if let Some(cached) = state.cache.get::<serde_json::Value>(&redis_key).await {
@@ -165,26 +169,25 @@ pub async fn get_workflow(
             .add(
                 Condition::all()
                     .add(workflows::Column::OrgId.eq(&user.org_id))
-                    .add(workflows::Column::UserId.eq(user.id))
+                    .add(workflows::Column::UserId.eq(user.id)),
             )
             // 2. Public workflows in same org
             .add(
                 Condition::all()
                     .add(workflows::Column::OrgId.eq(&user.org_id))
-                    .add(workflows::Column::IsPublic.eq(true))
+                    .add(workflows::Column::IsPublic.eq(true)),
             )
             // 3. Official public workflows
             .add(
                 Condition::all()
                     .add(workflows::Column::OrgId.eq(crate::official_org_slug()))
-                    .add(workflows::Column::IsPublic.eq(true))
-            )
+                    .add(workflows::Column::IsPublic.eq(true)),
+            ),
     );
 
-    let workflow = query
-        .one(&state.db)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Workflow '{}' not found or access denied", id_str)))?;
+    let workflow = query.one(&state.db).await?.ok_or_else(|| {
+        AppError::NotFound(format!("Workflow '{}' not found or access denied", id_str))
+    })?;
 
     Ok(AxumJson(workflow))
 }
@@ -251,12 +254,9 @@ pub async fn update_workflow(
         .filter(workflows::Column::OrgId.eq(&user.org_id))
         .filter(workflows::Column::UserId.eq(user.id));
 
-    let workflow = query
-        .one(&state.db)
-        .await?
-        .ok_or(AppError::NotFound(
-            "Workflow not found or you do not have permission to edit it".to_string(),
-        ))?;
+    let workflow = query.one(&state.db).await?.ok_or(AppError::NotFound(
+        "Workflow not found or you do not have permission to edit it".to_string(),
+    ))?;
 
     let mut active = workflow.into_active_model();
 
@@ -309,12 +309,9 @@ pub async fn delete_workflow(
         .filter(workflows::Column::OrgId.eq(&user.org_id))
         .filter(workflows::Column::UserId.eq(user.id));
 
-    let workflow = query
-        .one(&state.db)
-        .await?
-        .ok_or(AppError::NotFound(
-            "Workflow not found or you do not have permission to delete it".to_string(),
-        ))?;
+    let workflow = query.one(&state.db).await?.ok_or(AppError::NotFound(
+        "Workflow not found or you do not have permission to delete it".to_string(),
+    ))?;
 
     let id = workflow.id;
     workflows::Entity::delete_by_id(id).exec(&state.db).await?;
@@ -334,7 +331,6 @@ pub async fn execute_workflow(
     Path(id): Path<Uuid>,
     Json(req): Json<ExecuteWorkflowRequest>,
 ) -> Result<AxumJson<ExecuteWorkflowResponse>, AppError> {
-
     // Find the workflow
     let workflow = workflows::Entity::find_by_id(id)
         .filter(
@@ -343,20 +339,20 @@ pub async fn execute_workflow(
                 .add(
                     Condition::all()
                         .add(workflows::Column::OrgId.eq(&user.org_id))
-                        .add(workflows::Column::UserId.eq(user.id))
+                        .add(workflows::Column::UserId.eq(user.id)),
                 )
                 // Public workflow in same org
                 .add(
                     Condition::all()
                         .add(workflows::Column::OrgId.eq(&user.org_id))
-                        .add(workflows::Column::IsPublic.eq(true))
+                        .add(workflows::Column::IsPublic.eq(true)),
                 )
                 // Official public workflow
                 .add(
                     Condition::all()
                         .add(workflows::Column::OrgId.eq(crate::official_org_slug()))
-                        .add(workflows::Column::IsPublic.eq(true))
-                )
+                        .add(workflows::Column::IsPublic.eq(true)),
+                ),
         )
         .one(&state.db)
         .await?

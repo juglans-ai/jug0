@@ -6,10 +6,10 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::AppState;
 use crate::auth::AuthUser;
 use crate::errors::AppError;
 use crate::services::search::SearchResponse;
+use crate::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct SearchRequest {
@@ -24,10 +24,15 @@ pub async fn web_search(
     Json(req): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, AppError> {
     if req.query.trim().is_empty() {
-        return Err(AppError::BadRequest("Search query cannot be empty".to_string()));
+        return Err(AppError::BadRequest(
+            "Search query cannot be empty".to_string(),
+        ));
     }
 
-    let result = state.search_service.search(&req.query).await
+    let result = state
+        .search
+        .search(&req.query)
+        .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     Ok(Json(result))

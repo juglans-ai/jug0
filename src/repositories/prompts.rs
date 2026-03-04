@@ -3,8 +3,8 @@
 // Prompt repository with cache + DB fallback
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, IntoActiveModel,
+    QueryFilter, QueryOrder, Set,
 };
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -204,9 +204,10 @@ impl PromptRepository {
             query = query.filter(prompts::Column::Slug.eq(id_or_slug));
         }
 
-        let prompt = query.one(&self.db).await?.ok_or_else(|| {
-            AppError::NotFound("Prompt not found".to_string())
-        })?;
+        let prompt = query
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Prompt not found".to_string()))?;
 
         // Permission check
         let is_owner =
@@ -252,9 +253,10 @@ impl PromptRepository {
             query = query.filter(prompts::Column::Slug.eq(id_or_slug));
         }
 
-        let prompt = query.one(&self.db).await?.ok_or_else(|| {
-            AppError::NotFound("Prompt not found".to_string())
-        })?;
+        let prompt = query
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Prompt not found".to_string()))?;
 
         // Permission check
         let is_owner =

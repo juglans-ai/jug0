@@ -1,22 +1,19 @@
 // src/handlers/api_keys.rs
 use axum::{
-    extract::{Extension, Path, Json},
+    extract::{Extension, Json, Path},
     Json as AxumJson,
 };
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait,
-    QueryFilter, Set, QueryOrder
-};
+use rand::{distributions::Alphanumeric, Rng};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use std::sync::Arc;
 use uuid::Uuid;
-use rand::{distributions::Alphanumeric, Rng};
 
+use crate::auth::{hash_key, AuthUser};
 use crate::entities::api_keys;
-use crate::AppState;
 use crate::errors::AppError;
-use crate::auth::{AuthUser, hash_key};
 use crate::request::CreateApiKeyRequest;
 use crate::response::CreateApiKeyResponse;
+use crate::AppState;
 
 // GET /api/keys
 pub async fn list_keys(
@@ -38,7 +35,6 @@ pub async fn create_key(
     user: AuthUser,
     Json(req): Json<CreateApiKeyRequest>,
 ) -> Result<AxumJson<CreateApiKeyResponse>, AppError> {
-
     let random_part: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(32)
@@ -49,9 +45,7 @@ pub async fn create_key(
     let hashed = hash_key(&raw_key);
     let now = chrono::Utc::now().naive_utc();
 
-    let expires_at = req.days_valid.map(|d| {
-        now + chrono::Duration::days(d)
-    });
+    let expires_at = req.days_valid.map(|d| now + chrono::Duration::days(d));
 
     let new_key = api_keys::ActiveModel {
         id: Set(Uuid::new_v4()),
@@ -81,11 +75,10 @@ pub async fn delete_key(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<AxumJson<serde_json::Value>, AppError> {
-    
     let result = api_keys::Entity::delete_many()
         .filter(api_keys::Column::Id.eq(id))
         // 【修复】user.sub -> user.id (UUID)
-        .filter(api_keys::Column::UserId.eq(user.id)) 
+        .filter(api_keys::Column::UserId.eq(user.id))
         .exec(&state.db)
         .await?;
 

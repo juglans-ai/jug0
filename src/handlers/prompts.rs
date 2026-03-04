@@ -6,12 +6,12 @@ use axum::{
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::entities::prompts;
-use crate::AppState;
-use crate::errors::AppError;
 use crate::auth::AuthUser;
-use crate::request::{CreatePromptRequest, UpdatePromptRequest, PromptFilter, RenderPromptRequest};
+use crate::entities::prompts;
+use crate::errors::AppError;
+use crate::request::{CreatePromptRequest, PromptFilter, RenderPromptRequest, UpdatePromptRequest};
 use crate::response::{PromptWithOwner, RenderPromptResponse};
+use crate::AppState;
 
 /// GET /api/prompts
 pub async fn list_prompts(

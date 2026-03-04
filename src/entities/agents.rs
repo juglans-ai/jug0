@@ -8,21 +8,21 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub slug: String,
-    
+
     pub org_id: Option<String>, // 新增
     pub user_id: Option<Uuid>,  // 变更 UUID
-    
+
     pub name: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub description: Option<String>,
     pub system_prompt_id: Option<Uuid>,
-    
+
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub allowed_models: Option<serde_json::Value>,
     pub default_model: Option<String>,
-    
+
     pub temperature: Option<f64>,
-    
+
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub mcp_config: Option<serde_json::Value>,
 
@@ -49,13 +49,21 @@ pub struct Model {
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
-    #[sea_orm(belongs_to = "super::prompts::Entity", from = "Column::SystemPromptId", to = "super::prompts::Column::Id")]
+    #[sea_orm(
+        belongs_to = "super::prompts::Entity",
+        from = "Column::SystemPromptId",
+        to = "super::prompts::Column::Id"
+    )]
     SystemPrompt,
 
     #[sea_orm(belongs_to = "Entity", from = "Column::ForkFromId", to = "Column::Id")]
     ForkFrom,
 
-    #[sea_orm(belongs_to = "super::workflows::Entity", from = "Column::WorkflowId", to = "super::workflows::Column::Id")]
+    #[sea_orm(
+        belongs_to = "super::workflows::Entity",
+        from = "Column::WorkflowId",
+        to = "super::workflows::Column::Id"
+    )]
     Workflow,
 }
 

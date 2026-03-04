@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "models")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub id: String,  // 模型 ID，如 "gpt-4o"
+    pub id: String, // 模型 ID，如 "gpt-4o"
 
-    pub provider: String,  // openai, deepseek, gemini, qwen
+    pub provider: String, // openai, deepseek, gemini, qwen
 
     pub name: Option<String>,
     pub owned_by: Option<String>,

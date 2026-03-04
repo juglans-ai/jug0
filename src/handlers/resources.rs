@@ -10,14 +10,13 @@ use axum::{
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::sync::Arc;
 
-use crate::entities::{prompts, agents, workflows, users};
-use crate::AppState;
-use crate::errors::AppError;
 use crate::auth::OptionalAuthUser;
+use crate::entities::{agents, prompts, users, workflows};
+use crate::errors::AppError;
 use crate::response::{
-    OwnerInfo, PublicUserProfile,
-    ResourceResponse, ResourcePrompt, ResourceAgent, ResourceWorkflow,
+    OwnerInfo, PublicUserProfile, ResourceAgent, ResourcePrompt, ResourceResponse, ResourceWorkflow,
 };
+use crate::AppState;
 
 /// Check if user has access to a prompt
 fn can_access_prompt(prompt: &prompts::Model, user: &Option<crate::auth::AuthUser>) -> bool {
@@ -135,9 +134,7 @@ pub async fn get_resource_by_owner_slug(
         if can_access_agent(&agent, &user.0) {
             // Fetch associated system prompt if exists
             let system_prompt = if let Some(sp_id) = agent.system_prompt_id {
-                prompts::Entity::find_by_id(sp_id)
-                    .one(&state.db)
-                    .await?
+                prompts::Entity::find_by_id(sp_id).one(&state.db).await?
             } else {
                 None
             };

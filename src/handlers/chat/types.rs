@@ -13,8 +13,8 @@ use uuid::Uuid;
 #[serde(untagged)]
 pub enum ChatIdInput {
     Uuid(Uuid),
-    Handle(String),      // "@jarvis" — starts with @
-    ExternalId(String),  // "oc_xxx" — arbitrary platform ID
+    Handle(String),     // "@jarvis" — starts with @
+    ExternalId(String), // "oc_xxx" — arbitrary platform ID
 }
 
 impl<'de> Deserialize<'de> for ChatIdInput {
@@ -246,7 +246,9 @@ impl From<crate::entities::messages::Model> for MessageResponse {
             tool_call_id: m.tool_call_id,
             ref_message_id: m.ref_message_id,
             metadata: m.metadata,
-            created_at: m.created_at.map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
+            created_at: m
+                .created_at
+                .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)),
         }
     }
 }
@@ -291,7 +293,7 @@ pub enum InternalStreamEvent {
     /// 元数据（包含 chat_id、message_id 和 UUID）
     Meta {
         chat_id: Uuid,
-        user_message_id: i32,      // 用户消息的 message_id
+        user_message_id: i32, // 用户消息的 message_id
         user_message_uuid: Option<Uuid>,
     },
     /// 内容块
@@ -299,7 +301,10 @@ pub enum InternalStreamEvent {
     /// 工具调用
     ToolCall { message_id: i32, tools: Vec<Value> },
     /// 完成（包含 assistant 消息的 UUID）
-    Done { message_id: i32, assistant_message_uuid: Option<Uuid> },
+    Done {
+        message_id: i32,
+        assistant_message_uuid: Option<Uuid>,
+    },
     /// 错误
     Error(String),
 }

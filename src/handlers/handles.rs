@@ -108,7 +108,9 @@ pub async fn delete_handle(
     };
 
     if !can_delete {
-        return Err(AppError::Forbidden("You don't have permission to delete this handle".to_string()));
+        return Err(AppError::Forbidden(
+            "You don't have permission to delete this handle".to_string(),
+        ));
     }
 
     // Delete the handle
@@ -157,7 +159,10 @@ pub async fn create_handle(
         .map_err(AppError::Database)?;
 
     if existing.is_some() {
-        return Err(AppError::Conflict(format!("Handle @{} is already taken", handle)));
+        return Err(AppError::Conflict(format!(
+            "Handle @{} is already taken",
+            handle
+        )));
     }
 
     let new_handle = handles::ActiveModel {

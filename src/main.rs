@@ -1,31 +1,32 @@
 // src/main.rs
-mod entities;
-mod handlers;
-mod services;
-mod errors;
-mod providers;
 mod auth;
+mod entities;
+mod errors;
+mod handlers;
+mod providers;
+pub mod repositories;
 pub mod request;
 pub mod response;
-pub mod repositories;
+mod services;
 
 use axum::{
-    routing::{get, post, delete},
-    Extension, Router, middleware,
     http::{header, Method},
+    middleware,
+    routing::{delete, get, post},
+    Extension, Router,
 };
-use tower_http::cors::{CorsLayer, Any};
-use tower_http::services::ServeDir;
-use sea_orm::{Database, ConnectOptions, EntityTrait};
+use dashmap::DashMap;
+use dotenvy::dotenv;
+use log::LevelFilter;
+use sea_orm::{ConnectOptions, Database, EntityTrait};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use dotenvy::dotenv;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use log::LevelFilter;
-use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 use lazy_static::lazy_static;
@@ -42,18 +43,19 @@ pub fn official_org_slug() -> &'static str {
     &OFFICIAL_ORG_SLUG
 }
 
+use crate::auth::{auth_middleware, optional_auth_middleware};
+use crate::entities::{api_keys, organizations, users};
+use crate::handlers::chat::types::ToolResultPayload;
+use crate::providers::search::tavily::TavilySearch;
+use crate::providers::EmbeddingFactory;
+use crate::providers::ProviderFactory;
+use crate::providers::SearchProvider;
+use crate::repositories::{AgentRepository, PromptRepository};
+use crate::services::cache::CacheService;
 use crate::services::mcp::McpClient;
-use crate::services::qdrant::VectorDbService;
 use crate::services::memory::service::MemoryService;
 use crate::services::models::ModelsService;
-use crate::services::cache::CacheService;
-use crate::services::search::SearchService;
-use crate::providers::ProviderFactory;
-use crate::providers::EmbeddingFactory;
-use crate::auth::{auth_middleware, optional_auth_middleware};
-use crate::entities::{organizations, users, api_keys};
-use crate::repositories::{AgentRepository, PromptRepository};
-use crate::handlers::chat::types::ToolResultPayload;
+use crate::services::qdrant::VectorDbService;
 
 // AppState 定义
 pub struct AppState {
@@ -78,8 +80,8 @@ pub struct AppState {
     pub workflow_forwards: DashMap<Uuid, handlers::chat::types::WorkflowForwardInfo>,
     /// Shared HTTP client with connection pooling (for workflow forwarding etc.)
     pub http_client: reqwest::Client,
-    /// Search service (Tavily API)
-    pub search_service: SearchService,
+    /// Search provider (Tavily etc.)
+    pub search: Arc<dyn SearchProvider>,
     /// Upload directory for file storage
     pub upload_dir: String,
 }
@@ -102,7 +104,10 @@ async fn load_auth_data_to_redis(state: &AppState) {
     tracing::info!("Redis: {} users", all_users.len());
 
     // 2. Organizations (by id)
-    let all_orgs = organizations::Entity::find().all(db).await.unwrap_or_default();
+    let all_orgs = organizations::Entity::find()
+        .all(db)
+        .await
+        .unwrap_or_default();
     for o in &all_orgs {
         let _ = cache.set(&format!("jug0:org:{}", o.id), o, 0).await;
     }
@@ -112,10 +117,15 @@ async fn load_auth_data_to_redis(state: &AppState) {
     let all_keys = api_keys::Entity::find().all(db).await.unwrap_or_default();
     let mut key_count = 0;
     for k in &all_keys {
-        let expired = k.expires_at.map(|e| e < chrono::Utc::now().naive_utc()).unwrap_or(false);
+        let expired = k
+            .expires_at
+            .map(|e| e < chrono::Utc::now().naive_utc())
+            .unwrap_or(false);
         if !expired {
             if let Some(u) = all_users.iter().find(|u| u.id == k.user_id) {
-                let _ = cache.set(&format!("jug0:apikey:{}", k.key_hash), u, 0).await;
+                let _ = cache
+                    .set(&format!("jug0:apikey:{}", k.key_hash), u, 0)
+                    .await;
                 key_count += 1;
             }
         }
@@ -148,7 +158,11 @@ async fn warmup_cache(state: &AppState) {
     }
 
     // Warmup prompts list (triggers DB query + cache write)
-    match state.prompt_repo.list_for_user(&warmup_user, &PromptFilter::default()).await {
+    match state
+        .prompt_repo
+        .list_for_user(&warmup_user, &PromptFilter::default())
+        .await
+    {
         Ok(prompts) => tracing::info!("Cache warmup: {} prompts", prompts.len()),
         Err(e) => tracing::warn!("Cache warmup prompts failed: {}", e),
     }
@@ -161,7 +175,9 @@ async fn main() {
     dotenv().ok();
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(std::env::var("RUST_LOG").unwrap_or_else(|_| "jug0=debug,tower_http=debug".into())))
+        .with(tracing_subscriber::EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "jug0=debug,tower_http=debug".into()),
+        ))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -169,26 +185,33 @@ async fn main() {
 
     let mut opt = ConnectOptions::new(db_url);
     opt.max_connections(20)
-       .min_connections(5)
-       .connect_timeout(Duration::from_secs(10))
-       .sqlx_logging(true)
-       .sqlx_logging_level(LevelFilter::Debug);
+        .min_connections(5)
+        .connect_timeout(Duration::from_secs(10))
+        .sqlx_logging(true)
+        .sqlx_logging_level(LevelFilter::Debug);
 
-    let db = Database::connect(opt).await.expect("Failed to connect to DB");
+    let db = Database::connect(opt)
+        .await
+        .expect("Failed to connect to DB");
 
     // Pre-warm database connection pool with parallel queries
     // This ensures all min_connections are established before serving requests
     {
         use sea_orm::ConnectionTrait;
-        let warmup_queries: Vec<_> = (0..5).map(|_| {
-            db.execute(sea_orm::Statement::from_string(
-                sea_orm::DatabaseBackend::Postgres,
-                "SELECT 1".to_string(),
-            ))
-        }).collect();
+        let warmup_queries: Vec<_> = (0..5)
+            .map(|_| {
+                db.execute(sea_orm::Statement::from_string(
+                    sea_orm::DatabaseBackend::Postgres,
+                    "SELECT 1".to_string(),
+                ))
+            })
+            .collect();
         let results = futures::future::join_all(warmup_queries).await;
         let success_count = results.iter().filter(|r| r.is_ok()).count();
-        tracing::info!("Database pool warmup: {}/5 connections ready", success_count);
+        tracing::info!(
+            "Database pool warmup: {}/5 connections ready",
+            success_count
+        );
     }
 
     let providers = ProviderFactory::new();
@@ -227,9 +250,10 @@ async fn main() {
         .into_bytes();
 
     // Connect to Redis
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    let cache = CacheService::new(&redis_url).await
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let cache = CacheService::new(&redis_url)
+        .await
         .expect("Failed to connect to Redis");
     tracing::info!("Connected to Redis at {}", redis_url);
 
@@ -246,7 +270,7 @@ async fn main() {
         .build()
         .expect("Failed to create HTTP client");
 
-    let search_service = SearchService::new(http_client.clone());
+    let search: Arc<dyn SearchProvider> = Arc::new(TavilySearch::new(http_client.clone()));
 
     let upload_dir = std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "./uploads".to_string());
 
@@ -266,7 +290,7 @@ async fn main() {
         tool_result_channels: DashMap::new(),
         workflow_forwards: DashMap::new(),
         http_client,
-        search_service,
+        search,
         upload_dir: upload_dir.clone(),
     });
 
@@ -313,8 +337,14 @@ async fn main() {
         .route("/api/auth/login", post(handlers::auth::login))
         .route("/api/auth/register", post(handlers::auth::register))
         // Organization management (uses X-ORG-ID + X-ORG-KEY auth)
-        .route("/api/organizations/public-key", post(handlers::organizations::set_public_key))
-        .route("/api/organizations/info", get(handlers::organizations::get_org_info))
+        .route(
+            "/api/organizations/public-key",
+            post(handlers::organizations::set_public_key),
+        )
+        .route(
+            "/api/organizations/info",
+            get(handlers::organizations::get_org_info),
+        )
         // Models API (public, no auth required)
         .route("/api/models", get(handlers::models::list_models))
         .route("/api/models/sync", post(handlers::models::sync_models))
@@ -322,98 +352,162 @@ async fn main() {
 
     // Routes with optional authentication (public resources accessible without auth)
     let optional_auth_routes = Router::new()
-        .route("/api/r/:owner/:slug", get(handlers::resources::get_resource_by_owner_slug))
-        .route("/api/users/by-username/:username", get(handlers::resources::get_user_by_username))
-        .route_layer(middleware::from_fn_with_state(app_state.clone(), optional_auth_middleware))
+        .route(
+            "/api/r/:owner/:slug",
+            get(handlers::resources::get_resource_by_owner_slug),
+        )
+        .route(
+            "/api/users/by-username/:username",
+            get(handlers::resources::get_user_by_username),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            optional_auth_middleware,
+        ))
         .with_state(app_state.clone());
 
     let protected_routes = Router::new()
         // Auth
         .route("/api/auth/me", get(handlers::auth::me))
-
         // Chat 核心
         .route("/api/chat", post(handlers::chat::chat_handler))
         .route("/api/chat/stop", post(handlers::chat::stop_chat_handler))
-        .route("/api/chat/tool-result", post(handlers::chat::tool_result_handler))
+        .route(
+            "/api/chat/tool-result",
+            post(handlers::chat::tool_result_handler),
+        )
         .route("/api/chats", get(handlers::chat::list_chats_handler))
-        .route("/api/chat/:id", get(handlers::context::get_history).delete(handlers::context::delete_chat))
-        .route("/api/chat/:id/messages", delete(handlers::context::clear_chat_messages))
-        .route("/api/chat/:id/clear", post(handlers::context::clear_chat_history))
-
+        .route(
+            "/api/chat/:id",
+            get(handlers::context::get_history).delete(handlers::context::delete_chat),
+        )
+        .route(
+            "/api/chat/:id/messages",
+            delete(handlers::context::clear_chat_messages),
+        )
+        .route(
+            "/api/chat/:id/clear",
+            post(handlers::context::clear_chat_history),
+        )
         // Chat 消息管理（新增）
-        .route("/api/chats/:chat_id/context", get(handlers::messages::get_context))
-        .route("/api/chats/:chat_id/history", get(handlers::messages::get_history))
-        .route("/api/chats/:chat_id/messages",
-            get(handlers::messages::list_messages)
-            .post(handlers::messages::create_message)
+        .route(
+            "/api/chats/:chat_id/context",
+            get(handlers::messages::get_context),
         )
-        .route("/api/chats/:chat_id/messages/:message_id",
+        .route(
+            "/api/chats/:chat_id/history",
+            get(handlers::messages::get_history),
+        )
+        .route(
+            "/api/chats/:chat_id/messages",
+            get(handlers::messages::list_messages).post(handlers::messages::create_message),
+        )
+        .route(
+            "/api/chats/:chat_id/messages/:message_id",
             get(handlers::messages::get_message_by_id)
-            .patch(handlers::messages::update_message_by_id)
-            .delete(handlers::messages::delete_message_by_id)
+                .patch(handlers::messages::update_message_by_id)
+                .delete(handlers::messages::delete_message_by_id),
         )
-
         // 消息管理（按 UUID）
-        .route("/api/messages/:id",
+        .route(
+            "/api/messages/:id",
             get(handlers::messages::get_message)
-            .patch(handlers::messages::update_message)
-            .delete(handlers::messages::delete_message)
+                .patch(handlers::messages::update_message)
+                .delete(handlers::messages::delete_message),
         )
-
-        .route("/api/prompts", get(handlers::prompts::list_prompts).post(handlers::prompts::create_prompt))
-        .route("/api/prompts/:key",
+        .route(
+            "/api/prompts",
+            get(handlers::prompts::list_prompts).post(handlers::prompts::create_prompt),
+        )
+        .route(
+            "/api/prompts/:key",
             get(handlers::prompts::get_prompt)
-            .patch(handlers::prompts::update_prompt)
-            .put(handlers::prompts::update_prompt)  // PUT as alias for PATCH
-            .delete(handlers::prompts::delete_prompt)
+                .patch(handlers::prompts::update_prompt)
+                .put(handlers::prompts::update_prompt) // PUT as alias for PATCH
+                .delete(handlers::prompts::delete_prompt),
         )
-        .route("/api/prompts/:key/render", post(handlers::prompts::render_prompt))
-
-        .route("/api/agents", get(handlers::agents::list_agents).post(handlers::agents::create_agent))
-        .route("/api/agents/:id",
+        .route(
+            "/api/prompts/:key/render",
+            post(handlers::prompts::render_prompt),
+        )
+        .route(
+            "/api/agents",
+            get(handlers::agents::list_agents).post(handlers::agents::create_agent),
+        )
+        .route(
+            "/api/agents/:id",
             get(handlers::agents::get_agent)
-            .patch(handlers::agents::update_agent)
-            .delete(handlers::agents::delete_agent)
+                .patch(handlers::agents::update_agent)
+                .delete(handlers::agents::delete_agent),
         )
-
-        .route("/api/workflows", get(handlers::workflows::list_workflows).post(handlers::workflows::create_workflow))
-        .route("/api/workflows/:id",
+        .route(
+            "/api/workflows",
+            get(handlers::workflows::list_workflows).post(handlers::workflows::create_workflow),
+        )
+        .route(
+            "/api/workflows/:id",
             get(handlers::workflows::get_workflow)
-            .patch(handlers::workflows::update_workflow)
-            .delete(handlers::workflows::delete_workflow)
+                .patch(handlers::workflows::update_workflow)
+                .delete(handlers::workflows::delete_workflow),
         )
-        .route("/api/workflows/:id/execute", post(handlers::workflows::execute_workflow))
-
-        .route("/api/keys", get(handlers::api_keys::list_keys).post(handlers::api_keys::create_key))
+        .route(
+            "/api/workflows/:id/execute",
+            post(handlers::workflows::execute_workflow),
+        )
+        .route(
+            "/api/keys",
+            get(handlers::api_keys::list_keys).post(handlers::api_keys::create_key),
+        )
         .route("/api/keys/:id", delete(handlers::api_keys::delete_key))
-
         .route("/api/handles", get(handlers::handles::list_handles))
-        .route("/api/handles/:handle", get(handlers::handles::get_handle).delete(handlers::handles::delete_handle))
-        .route("/api/handles/:handle/check", get(handlers::handles::check_handle))
-
+        .route(
+            "/api/handles/:handle",
+            get(handlers::handles::get_handle).delete(handlers::handles::delete_handle),
+        )
+        .route(
+            "/api/handles/:handle/check",
+            get(handlers::handles::check_handle),
+        )
         .route("/api/memories", get(handlers::memories::list_memories))
-        .route("/api/memories/:id", delete(handlers::memories::delete_memory))
-        .route("/api/memories/search", post(handlers::memories::search_memories))
-
+        .route(
+            "/api/memories/:id",
+            delete(handlers::memories::delete_memory),
+        )
+        .route(
+            "/api/memories/search",
+            post(handlers::memories::search_memories),
+        )
         .route("/api/search", post(handlers::search::web_search))
         .route("/api/upload", post(handlers::files::upload))
-
-        .route("/api/embeddings", post(handlers::embeddings::create_embedding))
-
+        .route(
+            "/api/embeddings",
+            post(handlers::embeddings::create_embedding),
+        )
         // Usage statistics
         .route("/api/usage/stats", get(handlers::usage::get_usage_stats))
-
         // Internal APIs for juglans-api user sync
         .route("/api/internal/sync-user", post(handlers::users::sync_user))
-        .route("/api/internal/sync-users", post(handlers::users::batch_sync_users))
-
-        .route_layer(middleware::from_fn_with_state(app_state.clone(), auth_middleware))
+        .route(
+            "/api/internal/sync-users",
+            post(handlers::users::batch_sync_users),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth_middleware,
+        ))
         .with_state(app_state.clone());
 
     // CORS 配置 - 允许浏览器直连
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .expose_headers([header::CONTENT_TYPE]);
 

@@ -2,8 +2,8 @@
 //
 // Model list response types
 
-use serde::Serialize;
 use crate::services::models::{ModelInfo, ProviderStatus};
+use serde::Serialize;
 
 /// Models list response
 #[derive(Debug, Serialize)]

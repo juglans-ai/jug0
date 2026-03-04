@@ -1,6 +1,6 @@
 // src/handlers/messages.rs
 use axum::{
-    extract::{Extension, Path, Query, Json},
+    extract::{Extension, Json, Path, Query},
     Json as AxumJson,
 };
 use sea_orm::{
@@ -14,10 +14,10 @@ use uuid::Uuid;
 use crate::auth::AuthUser;
 use crate::entities::{chats, messages};
 use crate::errors::AppError;
+use crate::handlers::chat::resolve_chat_id_strict;
 use crate::handlers::chat::types::{
     ContextQuery, ContextResponse, CreateMessageRequest, MessageResponse, UpdateMessageRequest,
 };
-use crate::handlers::chat::resolve_chat_id_strict;
 use crate::AppState;
 
 // ============================================
@@ -95,7 +95,8 @@ pub async fn create_message(
     Json(req): Json<CreateMessageRequest>,
 ) -> Result<AxumJson<MessageResponse>, AppError> {
     // Resolve chat_id (UUID or @handle)
-    let chat_id = resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
+    let chat_id =
+        resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
     // 1. 验证 chat 所有权
     let chat = ensure_chat_owner(&state, &user, chat_id).await?;
 
@@ -121,7 +122,10 @@ pub async fn create_message(
 
     // 4. 更新 chat.last_message_id
     chats::Entity::update_many()
-        .col_expr(chats::Column::LastMessageId, sea_orm::sea_query::Expr::value(next_message_id))
+        .col_expr(
+            chats::Column::LastMessageId,
+            sea_orm::sea_query::Expr::value(next_message_id),
+        )
         .col_expr(
             chats::Column::UpdatedAt,
             sea_orm::sea_query::Expr::value(chrono::Utc::now().naive_utc()),
@@ -146,7 +150,8 @@ pub async fn list_messages(
     Query(query): Query<ContextQuery>,
 ) -> Result<AxumJson<Vec<MessageResponse>>, AppError> {
     // Resolve chat_id (UUID or @handle)
-    let chat_id = resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
+    let chat_id =
+        resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
     // 验证 chat 所有权
     let _ = ensure_chat_owner(&state, &user, chat_id).await?;
 
@@ -155,7 +160,10 @@ pub async fn list_messages(
 
     // state 过滤（默认仅返回用户可见的消息：context_visible + display_only）
     if !query.include_all {
-        db_query = db_query.filter(messages::Column::State.is_in([messages::states::CONTEXT_VISIBLE, messages::states::DISPLAY_ONLY]));
+        db_query = db_query.filter(messages::Column::State.is_in([
+            messages::states::CONTEXT_VISIBLE,
+            messages::states::DISPLAY_ONLY,
+        ]));
     }
 
     // 分页
@@ -190,7 +198,8 @@ pub async fn get_context(
     Query(query): Query<ContextQuery>,
 ) -> Result<AxumJson<ContextResponse>, AppError> {
     // Resolve chat_id (UUID or @handle)
-    let chat_id = resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
+    let chat_id =
+        resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
     // 验证 chat 所有权
     let _ = ensure_chat_owner(&state, &user, chat_id).await?;
 
@@ -198,7 +207,10 @@ pub async fn get_context(
     let mut db_query = messages::Entity::find().filter(messages::Column::ChatId.eq(chat_id));
 
     if !query.include_all {
-        db_query = db_query.filter(messages::Column::State.is_in([messages::states::CONTEXT_VISIBLE, messages::states::CONTEXT_HIDDEN]));
+        db_query = db_query.filter(messages::Column::State.is_in([
+            messages::states::CONTEXT_VISIBLE,
+            messages::states::CONTEXT_HIDDEN,
+        ]));
     }
 
     if let Some(from_id) = query.from_message_id {
@@ -229,7 +241,8 @@ pub async fn get_history(
     Query(query): Query<ContextQuery>,
 ) -> Result<AxumJson<ContextResponse>, AppError> {
     // Resolve chat_id (UUID or @handle)
-    let chat_id = resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
+    let chat_id =
+        resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
     // 验证 chat 所有权
     let _ = ensure_chat_owner(&state, &user, chat_id).await?;
 
@@ -329,7 +342,8 @@ pub async fn get_message_by_id(
     Path((chat_id_or_handle, message_id)): Path<(String, i32)>,
 ) -> Result<AxumJson<MessageResponse>, AppError> {
     // Resolve chat_id (UUID or @handle)
-    let chat_id = resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
+    let chat_id =
+        resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
     // 验证 chat 所有权
     let _ = ensure_chat_owner(&state, &user, chat_id).await?;
 
@@ -349,7 +363,8 @@ pub async fn update_message_by_id(
     Json(req): Json<UpdateMessageRequest>,
 ) -> Result<AxumJson<MessageResponse>, AppError> {
     // Resolve chat_id (UUID or @handle)
-    let chat_id = resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
+    let chat_id =
+        resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
     // 验证 chat 所有权
     let _ = ensure_chat_owner(&state, &user, chat_id).await?;
 
@@ -385,7 +400,8 @@ pub async fn delete_message_by_id(
     Path((chat_id_or_handle, message_id)): Path<(String, i32)>,
 ) -> Result<AxumJson<serde_json::Value>, AppError> {
     // Resolve chat_id (UUID or @handle)
-    let chat_id = resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
+    let chat_id =
+        resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
     // 验证 chat 所有权
     let _ = ensure_chat_owner(&state, &user, chat_id).await?;
 
@@ -417,7 +433,10 @@ pub async fn load_context_for_chat(
     let mut query = messages::Entity::find().filter(messages::Column::ChatId.eq(chat_id));
 
     if !include_all {
-        query = query.filter(messages::Column::State.is_in([messages::states::CONTEXT_VISIBLE, messages::states::CONTEXT_HIDDEN]));
+        query = query.filter(messages::Column::State.is_in([
+            messages::states::CONTEXT_VISIBLE,
+            messages::states::CONTEXT_HIDDEN,
+        ]));
     }
 
     query
@@ -461,7 +480,10 @@ pub async fn create_message_internal(
 
     // 更新 chat.last_message_id
     let update_result = chats::Entity::update_many()
-        .col_expr(chats::Column::LastMessageId, sea_orm::sea_query::Expr::value(next_message_id))
+        .col_expr(
+            chats::Column::LastMessageId,
+            sea_orm::sea_query::Expr::value(next_message_id),
+        )
         .col_expr(
             chats::Column::UpdatedAt,
             sea_orm::sea_query::Expr::value(chrono::Utc::now().naive_utc()),
@@ -471,7 +493,10 @@ pub async fn create_message_internal(
         .await?;
 
     if update_result.rows_affected == 0 {
-        tracing::warn!("Failed to update chat.last_message_id for chat_id={}", chat_id);
+        tracing::warn!(
+            "Failed to update chat.last_message_id for chat_id={}",
+            chat_id
+        );
     }
 
     Ok((inserted, next_message_id))

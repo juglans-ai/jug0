@@ -3,8 +3,8 @@ use anyhow::Result;
 use chrono::Utc;
 use reqwest::Client;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait,
-    PaginatorTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, Set,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::entities::{models, model_sync_log};
+use crate::entities::{model_sync_log, models};
 
 const MEMORY_CACHE_TTL_SECS: u64 = 300; // 5 minutes
 
@@ -154,7 +154,10 @@ impl ModelsService {
             .order_by_asc(models::Column::Id);
 
         let db_models = if let Some(p) = provider {
-            query.filter(models::Column::Provider.eq(p)).all(&self.db).await?
+            query
+                .filter(models::Column::Provider.eq(p))
+                .all(&self.db)
+                .await?
         } else {
             query.all(&self.db).await?
         };
@@ -223,13 +226,15 @@ impl ModelsService {
                 }
 
                 // Log success
-                self.log_sync(provider, "success", count as i32, None).await?;
+                self.log_sync(provider, "success", count as i32, None)
+                    .await?;
 
                 Ok(count)
             }
             Err(e) => {
                 // Log failure
-                self.log_sync(provider, "failed", 0, Some(e.to_string())).await?;
+                self.log_sync(provider, "failed", 0, Some(e.to_string()))
+                    .await?;
                 Err(e)
             }
         }
@@ -255,7 +260,13 @@ impl ModelsService {
         Ok(())
     }
 
-    async fn log_sync(&self, provider: &str, status: &str, model_count: i32, error: Option<String>) -> Result<()> {
+    async fn log_sync(
+        &self,
+        provider: &str,
+        status: &str,
+        model_count: i32,
+        error: Option<String>,
+    ) -> Result<()> {
         let log = model_sync_log::ActiveModel {
             id: Set(Uuid::new_v4()),
             provider: Set(provider.to_string()),
@@ -271,13 +282,16 @@ impl ModelsService {
     // ========== Provider-specific fetchers ==========
 
     async fn fetch_openai_models(&self) -> Result<Vec<models::ActiveModel>> {
-        let api_key = self.openai_key.as_ref()
+        let api_key = self
+            .openai_key
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("OPENAI_API_KEY not configured"))?;
 
         let api_base = std::env::var("OPENAI_API_BASE")
             .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
 
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .get(format!("{}/models", api_base))
             .header("Authorization", format!("Bearer {}", api_key))
             .send()
@@ -303,12 +317,17 @@ impl ModelsService {
         let now = Utc::now().naive_utc();
 
         // Filter to chat models only
-        let chat_models: Vec<_> = data.data.into_iter()
-            .filter(|m| m.id.starts_with("gpt-") || m.id.starts_with("o1") || m.id.starts_with("chatgpt"))
+        let chat_models: Vec<_> = data
+            .data
+            .into_iter()
+            .filter(|m| {
+                m.id.starts_with("gpt-") || m.id.starts_with("o1") || m.id.starts_with("chatgpt")
+            })
             .collect();
 
-        Ok(chat_models.into_iter().map(|m| {
-            models::ActiveModel {
+        Ok(chat_models
+            .into_iter()
+            .map(|m| models::ActiveModel {
                 id: Set(m.id.clone()),
                 provider: Set("openai".to_string()),
                 name: Set(Some(m.id.clone())),
@@ -320,15 +339,18 @@ impl ModelsService {
                 is_available: Set(true),
                 created_at: Set(Some(now)),
                 updated_at: Set(Some(now)),
-            }
-        }).collect())
+            })
+            .collect())
     }
 
     async fn fetch_deepseek_models(&self) -> Result<Vec<models::ActiveModel>> {
-        let api_key = self.deepseek_key.as_ref()
+        let api_key = self
+            .deepseek_key
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("DEEPSEEK_API_KEY not configured"))?;
 
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .get("https://api.deepseek.com/models")
             .header("Authorization", format!("Bearer {}", api_key))
             .send()
@@ -353,8 +375,10 @@ impl ModelsService {
         let data: DeepSeekModelsResponse = resp.json().await?;
         let now = Utc::now().naive_utc();
 
-        Ok(data.data.into_iter().map(|m| {
-            models::ActiveModel {
+        Ok(data
+            .data
+            .into_iter()
+            .map(|m| models::ActiveModel {
                 id: Set(m.id.clone()),
                 provider: Set("deepseek".to_string()),
                 name: Set(Some(m.id.clone())),
@@ -366,16 +390,22 @@ impl ModelsService {
                 is_available: Set(true),
                 created_at: Set(Some(now)),
                 updated_at: Set(Some(now)),
-            }
-        }).collect())
+            })
+            .collect())
     }
 
     async fn fetch_gemini_models(&self) -> Result<Vec<models::ActiveModel>> {
-        let api_key = self.gemini_key.as_ref()
+        let api_key = self
+            .gemini_key
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("GEMINI_API_KEY not configured"))?;
 
-        let resp = self.http_client
-            .get(format!("https://generativelanguage.googleapis.com/v1beta/models?key={}", api_key))
+        let resp = self
+            .http_client
+            .get(format!(
+                "https://generativelanguage.googleapis.com/v1beta/models?key={}",
+                api_key
+            ))
             .send()
             .await?;
 
@@ -391,7 +421,7 @@ impl ModelsService {
 
         #[derive(Deserialize)]
         struct GeminiModel {
-            name: String,  // "models/gemini-pro"
+            name: String, // "models/gemini-pro"
             #[serde(rename = "displayName")]
             display_name: Option<String>,
             #[serde(rename = "inputTokenLimit")]
@@ -404,40 +434,57 @@ impl ModelsService {
         let now = Utc::now().naive_utc();
 
         // Filter to chat models
-        let chat_models: Vec<_> = data.models.into_iter()
+        let chat_models: Vec<_> = data
+            .models
+            .into_iter()
             .filter(|m| {
-                m.supported_methods.as_ref()
-                    .map(|methods| methods.iter().any(|method| method.contains("generateContent")))
+                m.supported_methods
+                    .as_ref()
+                    .map(|methods| {
+                        methods
+                            .iter()
+                            .any(|method| method.contains("generateContent"))
+                    })
                     .unwrap_or(false)
             })
             .collect();
 
-        Ok(chat_models.into_iter().map(|m| {
-            // Extract model ID from "models/gemini-pro" -> "gemini-pro"
-            let id = m.name.strip_prefix("models/").unwrap_or(&m.name).to_string();
+        Ok(chat_models
+            .into_iter()
+            .map(|m| {
+                // Extract model ID from "models/gemini-pro" -> "gemini-pro"
+                let id = m
+                    .name
+                    .strip_prefix("models/")
+                    .unwrap_or(&m.name)
+                    .to_string();
 
-            models::ActiveModel {
-                id: Set(id.clone()),
-                provider: Set("gemini".to_string()),
-                name: Set(m.display_name.or(Some(id))),
-                owned_by: Set(Some("google".to_string())),
-                context_length: Set(m.input_token_limit),
-                capabilities: Set(Some(json!({"chat": true}))),
-                pricing: Set(None),
-                raw_data: Set(None),
-                is_available: Set(true),
-                created_at: Set(Some(now)),
-                updated_at: Set(Some(now)),
-            }
-        }).collect())
+                models::ActiveModel {
+                    id: Set(id.clone()),
+                    provider: Set("gemini".to_string()),
+                    name: Set(m.display_name.or(Some(id))),
+                    owned_by: Set(Some("google".to_string())),
+                    context_length: Set(m.input_token_limit),
+                    capabilities: Set(Some(json!({"chat": true}))),
+                    pricing: Set(None),
+                    raw_data: Set(None),
+                    is_available: Set(true),
+                    created_at: Set(Some(now)),
+                    updated_at: Set(Some(now)),
+                }
+            })
+            .collect())
     }
 
     async fn fetch_qwen_models(&self) -> Result<Vec<models::ActiveModel>> {
-        let api_key = self.qwen_key.as_ref()
+        let api_key = self
+            .qwen_key
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("QWEN_API_KEY not configured"))?;
 
         // Qwen uses OpenAI-compatible mode for model listing
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .get("https://dashscope.aliyuncs.com/compatible-mode/v1/models")
             .header("Authorization", format!("Bearer {}", api_key))
             .send()
@@ -462,8 +509,10 @@ impl ModelsService {
         let data: QwenModelsResponse = resp.json().await?;
         let now = Utc::now().naive_utc();
 
-        Ok(data.data.into_iter().map(|m| {
-            models::ActiveModel {
+        Ok(data
+            .data
+            .into_iter()
+            .map(|m| models::ActiveModel {
                 id: Set(m.id.clone()),
                 provider: Set("qwen".to_string()),
                 name: Set(Some(m.id.clone())),
@@ -475,8 +524,8 @@ impl ModelsService {
                 is_available: Set(true),
                 created_at: Set(Some(now)),
                 updated_at: Set(Some(now)),
-            }
-        }).collect())
+            })
+            .collect())
     }
 
     /// Get provider status summary

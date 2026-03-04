@@ -2,9 +2,9 @@
 //
 // Agent-related response types
 
-use serde::{Deserialize, Serialize};
-use crate::entities::{agents, prompts};
 use super::common::OwnerInfo;
+use crate::entities::{agents, prompts};
+use serde::{Deserialize, Serialize};
 
 /// Agent with owner information for list responses
 #[derive(Debug, Serialize, Deserialize)]

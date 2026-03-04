@@ -2,10 +2,7 @@
 //
 // File upload handler
 
-use axum::{
-    extract::Multipart,
-    Extension, Json,
-};
+use axum::{extract::Multipart, Extension, Json};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,18 +29,17 @@ pub async fn upload(
     _user: AuthUser,
     mut multipart: Multipart,
 ) -> Result<Json<UploadResponse>, AppError> {
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        AppError::BadRequest(format!("Failed to read multipart field: {}", e))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Failed to read multipart field: {}", e)))?
+    {
         let field_name = field.name().unwrap_or("").to_string();
         if field_name != "file" {
             continue;
         }
 
-        let original_filename = field
-            .file_name()
-            .unwrap_or("upload")
-            .to_string();
+        let original_filename = field.file_name().unwrap_or("upload").to_string();
 
         let content_type = field
             .content_type()
@@ -66,9 +62,10 @@ pub async fn upload(
         }
 
         // Read file data
-        let data = field.bytes().await.map_err(|e| {
-            AppError::BadRequest(format!("Failed to read file data: {}", e))
-        })?;
+        let data = field
+            .bytes()
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Failed to read file data: {}", e)))?;
 
         if data.len() > MAX_FILE_SIZE {
             return Err(AppError::BadRequest(format!(
@@ -90,9 +87,9 @@ pub async fn upload(
 
         // Write file
         let file_path = upload_dir.join(&stored_filename);
-        tokio::fs::write(&file_path, &data).await.map_err(|e| {
-            AppError::BadRequest(format!("Failed to write file: {}", e))
-        })?;
+        tokio::fs::write(&file_path, &data)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Failed to write file: {}", e)))?;
 
         let url = format!("/uploads/{}", stored_filename);
         let size = data.len();
@@ -112,5 +109,7 @@ pub async fn upload(
         }));
     }
 
-    Err(AppError::BadRequest("No 'file' field found in multipart form".to_string()))
+    Err(AppError::BadRequest(
+        "No 'file' field found in multipart form".to_string(),
+    ))
 }

@@ -9,7 +9,7 @@ pub struct Model {
     pub id: Uuid,
 
     pub provider: String,
-    pub status: String,  // success, failed
+    pub status: String, // success, failed
     pub model_count: Option<i32>,
 
     #[sea_orm(column_type = "Text", nullable)]

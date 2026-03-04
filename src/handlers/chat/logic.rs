@@ -1,28 +1,28 @@
 // src/handlers/chat/logic.rs
+use dashmap::DashMap;
+use futures::{Stream, StreamExt};
+use scopeguard::defer;
 use sea_orm::{
-    ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Set, ActiveModelTrait,
-    DatabaseConnection, QuerySelect
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use futures::{Stream, StreamExt};
 use std::pin::Pin;
 use std::time::Duration;
-use uuid::Uuid;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use dashmap::DashMap;
-use scopeguard::defer;
+use uuid::Uuid;
 
-use crate::entities::{messages, chats};
-use crate::entities::messages::message_types;
-use crate::services::mcp::{McpClient, McpTool};
-use crate::providers::{ChatStreamChunk, TokenUsage, ProviderFactory};
-use crate::services::memory::service::MemoryService;
-use crate::errors::AppError;
-use crate::auth::AuthUser;
-use super::types::{InternalStreamEvent, ToolCallAccumulator, MessagePart};
 use super::helpers::{merge_tools, try_repair_json};
+use super::types::{InternalStreamEvent, MessagePart, ToolCallAccumulator};
+use crate::auth::AuthUser;
+use crate::entities::messages::message_types;
+use crate::entities::{chats, messages};
+use crate::errors::AppError;
+use crate::providers::{ChatStreamChunk, ProviderFactory, TokenUsage};
+use crate::services::mcp::{McpClient, McpTool};
+use crate::services::memory::service::MemoryService;
 
 pub fn run_chat_stream(
     db: DatabaseConnection,
@@ -32,19 +32,18 @@ pub fn run_chat_stream(
     memory_service: MemoryService,
     user: AuthUser,
     chat_id: Uuid,
-    mut last_message_id: i32,  // 当前最新的 message_id
-    user_message_uuid: Uuid,   // 用户消息的 UUID
+    mut last_message_id: i32, // 当前最新的 message_id
+    user_message_uuid: Uuid,  // 用户消息的 UUID
     model_to_use: String,
     final_system_prompt: Option<String>,
     client_tools_def: Option<Vec<Value>>,
     server_tools: Vec<McpTool>,
     should_use_memory: bool,
-    history_override: Option<Value>,   // 上下文控制：true/false/自定义数组
-    message_state: String,             // 消息状态
+    history_override: Option<Value>, // 上下文控制：true/false/自定义数组
+    message_state: String,           // 消息状态
     tool_result_rx: Option<mpsc::Receiver<Vec<super::types::ToolResultPayload>>>,
     tool_result_channels: DashMap<Uuid, mpsc::Sender<Vec<super::types::ToolResultPayload>>>,
 ) -> impl Stream<Item = Result<InternalStreamEvent, AppError>> {
-
     let cancel_token = CancellationToken::new();
     active_requests.insert(chat_id, cancel_token.clone());
 
@@ -426,25 +425,31 @@ pub fn run_chat_stream(
 
 /// 将自定义 JSON 数组转为 Vec<messages::Model>
 fn parse_custom_history(items: &[Value]) -> Vec<messages::Model> {
-    items.iter().filter_map(|item| {
-        let role = item["role"].as_str()?.to_string();
-        let parts = item.get("parts").cloned().unwrap_or(json!([]));
-        Some(messages::Model {
-            id: Uuid::nil(),
-            chat_id: Uuid::nil(),
-            message_id: 0,
-            role,
-            message_type: "chat".to_string(),
-            state: messages::states::CONTEXT_VISIBLE.to_string(),
-            parts,
-            tool_calls: item.get("tool_calls").cloned(),
-            tool_call_id: item.get("tool_call_id").and_then(|v| v.as_str()).map(String::from),
-            ref_message_id: None,
-            metadata: None,
-            created_at: None,
-            updated_at: None,
+    items
+        .iter()
+        .filter_map(|item| {
+            let role = item["role"].as_str()?.to_string();
+            let parts = item.get("parts").cloned().unwrap_or(json!([]));
+            Some(messages::Model {
+                id: Uuid::nil(),
+                chat_id: Uuid::nil(),
+                message_id: 0,
+                role,
+                message_type: "chat".to_string(),
+                state: messages::states::CONTEXT_VISIBLE.to_string(),
+                parts,
+                tool_calls: item.get("tool_calls").cloned(),
+                tool_call_id: item
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                ref_message_id: None,
+                metadata: None,
+                created_at: None,
+                updated_at: None,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 /// 更新 chat.last_message_id
@@ -454,7 +459,10 @@ pub async fn update_chat_last_message_id(
     message_id: i32,
 ) -> Result<(), AppError> {
     chats::Entity::update_many()
-        .col_expr(chats::Column::LastMessageId, sea_orm::sea_query::Expr::value(message_id))
+        .col_expr(
+            chats::Column::LastMessageId,
+            sea_orm::sea_query::Expr::value(message_id),
+        )
         .col_expr(
             chats::Column::UpdatedAt,
             sea_orm::sea_query::Expr::value(chrono::Utc::now().naive_utc()),
