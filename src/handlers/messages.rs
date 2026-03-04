@@ -4,8 +4,8 @@ use axum::{
     Json as AxumJson,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
-    QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, IntoActiveModel,
+    QueryFilter, QueryOrder, QuerySelect, Set, Statement,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -18,6 +18,7 @@ use crate::handlers::chat::resolve_chat_id_strict;
 use crate::handlers::chat::types::{
     ContextQuery, ContextResponse, CreateMessageRequest, MessageResponse, UpdateMessageRequest,
 };
+use crate::request::chats::{BatchDeleteMessagesRequest, TruncateRequest};
 use crate::AppState;
 
 // ============================================
@@ -500,4 +501,85 @@ pub async fn create_message_internal(
     }
 
     Ok((inserted, next_message_id))
+}
+
+// ============================================
+// 批量操作
+// ============================================
+
+/// POST /api/chat/:id/messages/batch-delete
+/// 批量删除指定 message_id 的消息
+pub async fn batch_delete_messages(
+    Extension(state): Extension<Arc<AppState>>,
+    user: AuthUser,
+    Path(chat_id_or_handle): Path<String>,
+    Json(req): Json<BatchDeleteMessagesRequest>,
+) -> Result<AxumJson<serde_json::Value>, AppError> {
+    let chat_id =
+        resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
+    let _ = ensure_chat_owner(&state, &user, chat_id).await?;
+
+    if req.message_ids.is_empty() {
+        return Ok(AxumJson(json!({ "deleted_count": 0 })));
+    }
+
+    // Build parameterized IN clause
+    let placeholders: Vec<String> = (0..req.message_ids.len())
+        .map(|i| format!("${}", i + 2))
+        .collect();
+    let sql = format!(
+        "DELETE FROM messages WHERE chat_id = $1 AND message_id IN ({})",
+        placeholders.join(", ")
+    );
+
+    let mut values: Vec<sea_orm::Value> = vec![chat_id.into()];
+    for id in &req.message_ids {
+        values.push((*id).into());
+    }
+
+    let result = state
+        .db
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            &sql,
+            values,
+        ))
+        .await?;
+
+    Ok(AxumJson(json!({
+        "deleted_count": result.rows_affected()
+    })))
+}
+
+/// POST /api/chat/:id/messages/truncate
+/// 删除 message_id > from_message_id 的所有消息
+pub async fn truncate_messages(
+    Extension(state): Extension<Arc<AppState>>,
+    user: AuthUser,
+    Path(chat_id_or_handle): Path<String>,
+    Json(req): Json<TruncateRequest>,
+) -> Result<AxumJson<serde_json::Value>, AppError> {
+    let chat_id =
+        resolve_chat_id_strict(&state.db, &user.org_id, user.id, &chat_id_or_handle).await?;
+    let chat = ensure_chat_owner(&state, &user, chat_id).await?;
+
+    let result = state
+        .db
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            "DELETE FROM messages WHERE chat_id = $1 AND message_id > $2",
+            [chat_id.into(), req.from_message_id.into()],
+        ))
+        .await?;
+
+    // Update last_message_id
+    let mut active: chats::ActiveModel = chat.into();
+    active.last_message_id = Set(Some(req.from_message_id));
+    active.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
+    active.update(&state.db).await?;
+
+    Ok(AxumJson(json!({
+        "truncated_to": req.from_message_id,
+        "deleted_count": result.rows_affected()
+    })))
 }

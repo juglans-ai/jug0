@@ -379,7 +379,9 @@ async fn main() {
         .route("/api/chats", get(handlers::chat::list_chats_handler))
         .route(
             "/api/chat/:id",
-            get(handlers::context::get_history).delete(handlers::context::delete_chat),
+            get(handlers::context::get_history)
+                .patch(handlers::context::update_chat)
+                .delete(handlers::context::delete_chat),
         )
         .route(
             "/api/chat/:id/messages",
@@ -388,6 +390,14 @@ async fn main() {
         .route(
             "/api/chat/:id/clear",
             post(handlers::context::clear_chat_history),
+        )
+        .route(
+            "/api/chat/:id/branch",
+            post(handlers::context::branch_chat),
+        )
+        .route(
+            "/api/chat/:id/regenerate",
+            post(handlers::context::regenerate_chat),
         )
         // Chat 消息管理（新增）
         .route(
@@ -407,6 +417,14 @@ async fn main() {
             get(handlers::messages::get_message_by_id)
                 .patch(handlers::messages::update_message_by_id)
                 .delete(handlers::messages::delete_message_by_id),
+        )
+        .route(
+            "/api/chats/:chat_id/messages/batch-delete",
+            post(handlers::messages::batch_delete_messages),
+        )
+        .route(
+            "/api/chats/:chat_id/messages/truncate",
+            post(handlers::messages::truncate_messages),
         )
         // 消息管理（按 UUID）
         .route(
