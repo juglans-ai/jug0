@@ -10,6 +10,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::pin::Pin;
+use std::time::Duration;
 
 pub struct QwenProvider {
     client: Client,
@@ -68,8 +69,13 @@ struct QwenChoice {
 
 impl QwenProvider {
     pub fn new() -> Self {
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .unwrap_or_default();
         Self {
-            client: Client::new(),
+            client,
             api_key: env::var("QWEN_API_KEY").expect("QWEN_API_KEY not set"),
         }
     }

@@ -10,6 +10,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::pin::Pin;
+use std::time::Duration;
 use uuid::Uuid;
 
 // --- DTOs ---
@@ -118,8 +119,13 @@ pub struct GeminiProvider {
 impl GeminiProvider {
     pub fn new() -> Self {
         let api_key = std::env::var("GEMINI_API_KEY").unwrap_or_default();
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(300))
+            .build()
+            .unwrap_or_default();
         Self {
-            client: Client::new(),
+            client,
             base_url: "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
             api_key,
         }

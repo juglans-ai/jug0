@@ -30,3 +30,5 @@ Thumbs.db
 
 # Database backup (may contain real data)
 db/backup/*.sql
+.env.deploy
+.env.deploy
